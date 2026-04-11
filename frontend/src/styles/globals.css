@@ -1,0 +1,270 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Light mode variables */
+  --bg-primary: #FAF9F6;
+  --bg-secondary: #FFFFFF;
+  --surface: #F5F5F0;
+  --border: #E5E5E0;
+  --text-primary: #1A1A1A;
+  --text-secondary: #6B7280;
+  --text-muted: #9CA3AF;
+  --forest: #1E4D2B;
+  --forest-light: #2D6A3F;
+  --sienna: #C0522B;
+  --sienna-dark: #9A3D1F;
+  --sage: #A8C5A0;
+  --amber: #F59E0B;
+  --alert: #DC2626;
+}
+
+.dark {
+  /* Dark mode variables */
+  --bg-primary: #0F1419;
+  --bg-secondary: #1A1F26;
+  --surface: #252B33;
+  --border: #374151;
+  --text-primary: #F9FAFB;
+  --text-secondary: #9CA3AF;
+  --text-muted: #6B7280;
+  --forest: #4ADE80;
+  --forest-light: #86EFAC;
+  --sienna: #FB923C;
+  --sienna-dark: #F97316;
+  --sage: #86EFAC;
+  --amber: #FCD34D;
+  --alert: #F87171;
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+  
+  body {
+    font-family: 'Inter', system-ui, sans-serif;
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    @apply antialiased;
+  }
+}
+
+@layer components {
+  /* Primary CTA Button */
+  .btn-primary {
+    @apply inline-flex items-center justify-center px-6 py-3 rounded-lg font-medium text-white transition-all duration-200;
+    background-color: var(--sienna);
+  }
+  .btn-primary:hover {
+    background-color: var(--sienna-dark);
+    transform: translateY(-1px);
+  }
+  .btn-primary:active {
+    transform: scale(0.98);
+  }
+
+  /* Ghost Button */
+  .btn-ghost {
+    @apply inline-flex items-center justify-center px-6 py-3 rounded-lg font-medium transition-all duration-200 border;
+    border-color: var(--border);
+    color: var(--text-primary);
+    background-color: transparent;
+  }
+  .btn-ghost:hover {
+    background-color: var(--surface);
+  }
+
+  /* Card */
+  .card {
+    @apply rounded-card p-6 transition-all duration-200;
+    background-color: var(--bg-secondary);
+    border: 1px solid var(--border);
+    box-shadow: theme('boxShadow.card');
+  }
+  .dark .card {
+    box-shadow: theme('boxShadow.card-dark');
+  }
+
+  /* Card with hover effect */
+  .card-hover {
+    @apply card;
+  }
+  .card-hover:hover {
+    transform: translateY(-2px);
+    box-shadow: theme('boxShadow.elevated');
+  }
+
+  /* Input Field */
+  .input-field {
+    @apply w-full px-4 py-3 rounded-input border transition-all duration-200 outline-none;
+    background-color: var(--bg-secondary);
+    border-color: var(--border);
+    color: var(--text-primary);
+  }
+  .input-field:focus {
+    border-color: var(--forest);
+    box-shadow: 0 0 0 3px rgba(30, 77, 43, 0.2);
+  }
+  .dark .input-field:focus {
+    box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.2);
+  }
+  .input-field::placeholder {
+    color: var(--text-muted);
+  }
+
+  /* Section Title */
+  .section-title {
+    @apply font-serif font-semibold text-2xl md:text-3xl;
+    color: var(--text-primary);
+  }
+
+  /* Badge Base */
+  .badge {
+    @apply inline-flex items-center px-3 py-1 rounded-pill text-sm font-medium;
+  }
+
+  /* Badge Variants */
+  .badge-green {
+    @apply badge;
+    background-color: rgba(168, 197, 160, 0.2);
+    color: var(--forest);
+    border: 1px solid var(--sage);
+  }
+
+  .badge-amber {
+    @apply badge;
+    background-color: rgba(245, 158, 11, 0.2);
+    color: #92400E;
+    border: 1px solid var(--amber);
+  }
+  .dark .badge-amber {
+    color: #FCD34D;
+  }
+
+  .badge-red {
+    @apply badge;
+    background-color: rgba(220, 38, 38, 0.2);
+    color: #991B1B;
+    border: 1px solid var(--alert);
+  }
+  .dark .badge-red {
+    color: #F87171;
+  }
+
+  .badge-grey {
+    @apply badge;
+    background-color: var(--surface);
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+  }
+
+  /* Slider */
+  .slider {
+    @apply w-full h-2 rounded-full appearance-none cursor-pointer;
+    background-color: var(--border);
+  }
+  .slider::-webkit-slider-thumb {
+    @apply w-4 h-4 rounded-full appearance-none transition-transform;
+    background-color: var(--bg-secondary);
+    border: 2px solid var(--forest);
+  }
+  .slider::-webkit-slider-thumb:hover {
+    transform: scale(1.1);
+  }
+
+  /* Skeleton */
+  .skeleton {
+    @apply animate-pulse-slow rounded;
+    background-color: var(--surface);
+  }
+
+  /* Map Container */
+  .map-container {
+    @apply rounded-card overflow-hidden;
+    background-color: var(--bg-secondary);
+  }
+
+  /* Tab Toggle */
+  .tab-toggle {
+    @apply inline-flex p-1 rounded-lg;
+    background-color: var(--surface);
+  }
+  .tab-toggle-item {
+    @apply px-4 py-2 rounded-md text-sm font-medium transition-all duration-200;
+    color: var(--text-secondary);
+  }
+  .tab-toggle-item.active {
+    background-color: var(--bg-secondary);
+    color: var(--text-primary);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+  }
+}
+
+@layer utilities {
+  /* Price text styling */
+  .price-large {
+    @apply font-mono font-semibold text-2xl md:text-3xl;
+    color: var(--text-primary);
+  }
+
+  /* Stats number styling */
+  .stats-number {
+    @apply font-mono font-semibold text-xl md:text-2xl;
+    color: var(--text-primary);
+  }
+
+  /* Gradient text */
+  .gradient-text {
+    @apply bg-clip-text text-transparent;
+    background-image: linear-gradient(135deg, var(--forest) 0%, var(--sienna) 100%);
+  }
+
+  /* Print styles */
+  @media print {
+    .no-print {
+      display: none !important;
+    }
+    .print-only {
+      display: block !important;
+    }
+    body {
+      background: white !important;
+      color: black !important;
+    }
+    .card {
+      box-shadow: none !important;
+      border: 1px solid #ccc !important;
+    }
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--surface);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* Animation keyframes */
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}

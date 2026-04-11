@@ -1,0 +1,187 @@
+.
+├── backend
+│   ├── alembic
+│   │   ├── env.py
+│   │   ├── script.py.mako
+│   │   └── versions
+│   │       ├── 0001_initial_schema.py
+│   │       └── 0002_remove_deprecated_model_columns.py
+│   ├── alembic.ini
+│   ├── app
+│   │   ├── api
+│   │   │   ├── __init__.py
+│   │   │   ├── __pycache__
+│   │   │   │   └── __init__.cpython-311.pyc
+│   │   │   └── v1
+│   │   │       ├── endpoints
+│   │   │       │   ├── auth.py
+│   │   │       │   ├── health.py
+│   │   │       │   ├── __init__.py
+│   │   │       │   ├── market.py
+│   │   │       │   ├── predict.py
+│   │   │       │   └── __pycache__
+│   │   │       │       ├── auth.cpython-311.pyc
+│   │   │       │       ├── health.cpython-311.pyc
+│   │   │       │       ├── __init__.cpython-311.pyc
+│   │   │       │       ├── market.cpython-311.pyc
+│   │   │       │       └── predict.cpython-311.pyc
+│   │   │       ├── __init__.py
+│   │   │       ├── __pycache__
+│   │   │       │   ├── __init__.cpython-311.pyc
+│   │   │       │   └── router.cpython-311.pyc
+│   │   │       └── router.py
+│   │   ├── core
+│   │   │   ├── config.py
+│   │   │   ├── __init__.py
+│   │   │   ├── __pycache__
+│   │   │   │   ├── config.cpython-311.pyc
+│   │   │   │   ├── __init__.cpython-311.pyc
+│   │   │   │   └── security.cpython-311.pyc
+│   │   │   └── security.py
+│   │   ├── db
+│   │   │   ├── __init__.py
+│   │   │   ├── __pycache__
+│   │   │   │   ├── __init__.cpython-311.pyc
+│   │   │   │   └── session.cpython-311.pyc
+│   │   │   └── session.py
+│   │   ├── __init__.py
+│   │   ├── main.py
+│   │   ├── models
+│   │   │   ├── historical.py
+│   │   │   ├── __init__.py
+│   │   │   ├── prediction.py
+│   │   │   ├── __pycache__
+│   │   │   │   ├── historical.cpython-311.pyc
+│   │   │   │   ├── __init__.cpython-311.pyc
+│   │   │   │   ├── prediction.cpython-311.pyc
+│   │   │   │   └── user.cpython-311.pyc
+│   │   │   └── user.py
+│   │   ├── __pycache__
+│   │   │   ├── __init__.cpython-311.pyc
+│   │   │   └── main.cpython-311.pyc
+│   │   ├── schemas
+│   │   │   ├── auth.py
+│   │   │   ├── __init__.py
+│   │   │   ├── market.py
+│   │   │   ├── prediction.py
+│   │   │   └── __pycache__
+│   │   │       ├── auth.cpython-311.pyc
+│   │   │       ├── __init__.cpython-311.pyc
+│   │   │       ├── market.cpython-311.pyc
+│   │   │       └── prediction.cpython-311.pyc
+│   │   └── services
+│   │       ├── auth.py
+│   │       ├── inference.py
+│   │       ├── __init__.py
+│   │       ├── market.py
+│   │       └── __pycache__
+│   │           ├── auth.cpython-311.pyc
+│   │           ├── inference.cpython-311.pyc
+│   │           ├── __init__.cpython-311.pyc
+│   │           └── market.cpython-311.pyc
+│   ├── Dockerfile
+│   ├── requirements-dev.txt
+│   ├── requirements.txt
+│   └── tests
+│       ├── conftest.py
+│       ├── __init__.py
+│       ├── integration
+│       │   ├── __init__.py
+│       │   ├── test_auth_endpoints.py
+│       │   ├── test_market_endpoints.py
+│       │   └── test_predict_endpoints.py
+│       └── unit
+│           ├── __init__.py
+│           ├── test_auth_service.py
+│           ├── test_inference_service.py
+│           └── test_market_service.py
+├── DESIGN_TOKENS.md
+├── docker-compose.yml
+├── file-structure.txt
+├── frontend
+│   ├── index.html
+│   ├── node_modules
+│   ├── package.json
+│   ├── package-lock.json
+│   ├── postcss.config.js
+│   ├── public
+│   │   ├── favicon.svg
+│   │   ├── gadm41_KEN.gpkg
+│   │   └── kenya-counties.geojson
+│   ├── src
+│   │   ├── App.tsx
+│   │   ├── components
+│   │   │   ├── charts
+│   │   │   │   ├── investment
+│   │   │   │   │   └── BestInvestmentChart.tsx
+│   │   │   │   ├── proximity
+│   │   │   │   │   ├── CityProximityChart.tsx
+│   │   │   │   │   └── NairobiProximityChart.tsx
+│   │   │   │   ├── scores
+│   │   │   │   │   ├── AccessibilityScoreChart.tsx
+│   │   │   │   │   └── AmenitiesScoreChart.tsx
+│   │   │   │   └── spatial
+│   │   │   │       ├── ChoroplethMapDeck.tsx
+│   │   │   │       ├── IDWMapDeck.tsx
+│   │   │   │       └── ScatterMapDeck.tsx
+│   │   │   ├── forms
+│   │   │   │   └── EstimateForm.tsx
+│   │   │   ├── layout
+│   │   │   │   ├── Footer.tsx
+│   │   │   │   ├── Layout.tsx
+│   │   │   │   └── Navbar.tsx
+│   │   │   ├── modals
+│   │   │   │   └── AuthModal.tsx
+│   │   │   └── ui
+│   │   │       ├── AttributeCard.tsx
+│   │   │       ├── CountyFilter.tsx
+│   │   │       ├── ErrorBoundary.tsx
+│   │   │       ├── HistoryTable.tsx
+│   │   │       ├── KpiCard.tsx
+│   │   │       ├── KpiStrip.tsx
+│   │   │       ├── ReportDownload.tsx
+│   │   │       ├── ResultCard.tsx
+│   │   │       ├── Skeleton.tsx
+│   │   │       └── TabToggle.tsx
+│   │   ├── hooks
+│   │   │   ├── useMarketData.ts
+│   │   │   └── usePrediction.ts
+│   │   ├── lib
+│   │   │   ├── api.ts
+│   │   │   └── utils.ts
+│   │   ├── main.tsx
+│   │   ├── pages
+│   │   │   ├── AboutPage.tsx
+│   │   │   ├── DashboardPage.tsx
+│   │   │   ├── EstimatePage.tsx
+│   │   │   └── HomePage.tsx
+│   │   ├── store
+│   │   │   └── index.ts
+│   │   ├── styles
+│   │   │   └── globals.css
+│   │   └── types
+│   │       └── index.ts
+│   ├── tailwind.config.js
+│   ├── tsconfig.json
+│   ├── tsconfig.node.json
+│   └── vite.config.ts
+├── ml_models
+│   ├── mlp_county_mean_map.pkl
+│   ├── mlp_feature_list.pkl
+│   ├── mlp_global_mean.pkl
+│   ├── mlp_hidden_layers.pkl
+│   ├── mlp_model.pt
+│   └── mlp_scaler.pkl
+├── nginx
+│   └── nginx.dev.conf
+├── Notebook 
+│   ├── kenya_land_eda.ipynb
+│   └── kenya_land_valuation.ipynb
+├── README.md
+└── scripts
+    ├── kenya_land_engineered_final.csv
+    ├── kenya_land_engineered_final.parquet
+    ├── seed_historical.py
+    └── start.sh
+
+49 directories, 136 files

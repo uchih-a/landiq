@@ -1,0 +1,76 @@
+services:
+  # PostgreSQL Database
+  - type: pserv
+    name: landiq-db
+    env: docker
+    repo: https://github.com/YOUR_GITHUB_USERNAME/landiq-kenya
+    plan: starter
+    region: oregon
+    dockerfilePath: ./backend/Dockerfile.postgres
+    envVars:
+      - key: POSTGRES_DB
+        value: landiq_db
+      - key: POSTGRES_USER
+        value: landiq_user
+      - key: POSTGRES_PASSWORD
+        generateValue: true
+      - key: POSTGRES_INITDB_ARGS
+        value: --encoding=UTF8
+    disk:
+      name: postgres_data
+      mountPath: /var/lib/postgresql/data
+      sizeGB: 10
+
+  # FastAPI Backend
+  - type: web
+    name: landiq-api
+    env: docker
+    repo: https://github.com/YOUR_GITHUB_USERNAME/landiq-kenya
+    plan: starter
+    region: oregon
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    buildCommand: |
+      pip install --upgrade pip && \
+      pip install -r requirements.txt && \
+      alembic upgrade head
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    envVars:
+      - key: DATABASE_URL
+        fromService:
+          name: landiq-db
+          type: pserv
+          property: connectionString
+          envVars:
+            POSTGRES_USER: landiq_user
+            POSTGRES_PASSWORD: POSTGRES_PASSWORD
+            POSTGRES_DB: landiq_db
+      - key: JWT_SECRET_KEY
+        generateValue: true
+      - key: JWT_ALGORITHM
+        value: HS256
+      - key: ACCESS_TOKEN_EXPIRE_DAYS
+        value: 7
+      - key: ALLOWED_ORIGINS
+        value: '["https://landiq-kenya.vercel.app", "https://yourdomain.com"]'
+      - key: MODEL_DIR
+        value: ./ml_models
+      - key: NOMINATIM_USER_AGENT
+        value: landiq-kenya/1.0
+      - key: APP_ENV
+        value: production
+      - key: DEBUG
+        value: false
+      - key: APP_VERSION
+        value: 1.0.0
+    maxInstanceCount: 3
+    minInstanceCount: 1
+    healthCheckPath: /api/v1/health
+    headers:
+      - http_path: /api/v1/*
+        name: Access-Control-Allow-Origin
+        value: '*'
+    routes:
+      - type: http
+        source: /
+        destination: https://landiq-kenya.vercel.app
