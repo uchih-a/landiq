@@ -1,0 +1,5 @@
+# Place model artifacts here:
+# - mlp_model.pt
+# - mlp_scaler.pkl
+# - mlp_feature_list.pkl
+# - mlp_hidden_layers.pkl
