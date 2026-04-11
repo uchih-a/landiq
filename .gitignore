@@ -1,8 +1,5 @@
 **/.env
 !**/.env.example
-ml_models/*.pkl
-ml_models/*.pt
-ml_models/*.joblib
 !ml_models/.gitkeep
 __pycache__/
 *.py[cod]
@@ -13,3 +10,4 @@ frontend/dist/
 postgres_data/
 .DS_Store
 *.swp
+
