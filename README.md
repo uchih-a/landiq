@@ -186,3 +186,4 @@ MIT License - see LICENSE file for details.
 - OpenStreetMap for geocoding and amenities data
 - Kenya National Bureau of Statistics for county boundaries
 # landiq
+# landiq
