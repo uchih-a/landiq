@@ -19,9 +19,12 @@ COPY --from=builder /install /usr/local
 COPY app/ ./app/
 COPY alembic/ ./alembic/
 COPY alembic.ini .
+
+# Copy model files directly into the image
+COPY ml_models/ ./ml_models/
+
 RUN useradd -m -u 1001 appuser && chown -R appuser:appuser /app
 USER appuser
-VOLUME ["/app/ml_models"]
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health').read()"
