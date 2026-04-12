@@ -1,5 +1,6 @@
 [build]
-dockerfilePath = "Dockerfile"    
+dockerfilePath = "backend/Dockerfile"
+# No buildContext needed — Railway uses backend/ as context automatically
 
 [deploy]
 healthcheckPath = "/api/v1/health"
