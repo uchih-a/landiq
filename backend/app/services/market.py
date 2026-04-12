@@ -150,6 +150,7 @@ async def get_spatial_listings(
         .where(HistoricalListing.latitude.isnot(None))
         .where(HistoricalListing.longitude.isnot(None))
         .where(HistoricalListing.price_per_acre.isnot(None))
+        .where(HistoricalListing.price_per_acre > 0)
     )
     if county:
         query = query.where(HistoricalListing.county == county)
@@ -166,7 +167,11 @@ async def get_spatial_listings(
             "county": l.county or "Unknown",
         }
         for l in listings
-        if _safe_float(l.price_per_acre) is not None
+        if (
+            _safe_float(l.latitude) is not None       # filters NaN lat
+            and _safe_float(l.longitude) is not None  # filters NaN lon
+            and _safe_float(l.price_per_acre) is not None
+        )
     ]
 
 
