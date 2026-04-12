@@ -329,7 +329,6 @@ async def get_best_investment(
     accessibility = [c.median_accessibility_score for c in counties]
 
     # Infrastructure proxy: median distance to Nairobi per county.
-    # Fetched separately because CountyStat may not carry this directly.
     infra_query = (
         select(
             HistoricalListing.county,
@@ -340,8 +339,8 @@ async def get_best_investment(
         .where(HistoricalListing.dist_to_nairobi_km.isnot(None))
         .group_by(HistoricalListing.county)
     )
-    infra_result  = await db.execute(infra_query)
-    infra_map     = {row.county: float(row.median_infra_dist) for row in infra_result.all()}
+    infra_result = await db.execute(infra_query)
+    infra_map    = {row.county: float(row.median_infra_dist) for row in infra_result.all()}
 
     # Proximity proxy: median distance to reference city per county.
     prox_query = (
@@ -367,7 +366,6 @@ async def get_best_investment(
     # ------------------------------------------------------------------ #
     # Score each county
     # ------------------------------------------------------------------ #
-    # Weights matching the chart
     W_AFFORDABILITY  = 0.35
     W_AMENITIES      = 0.20
     W_ACCESSIBILITY  = 0.20
@@ -376,41 +374,31 @@ async def get_best_investment(
 
     scored = []
     for c in counties:
-        # Dimension scores — all on 0-1 scale
-        # Affordability: lower price → higher score (inverted normalisation)
         affordability_score  = 1.0 - _normalize(prices, c.median_price_per_acre)
-
         amenity_score        = _normalize(amenities, c.median_amenities_score)
         access_score         = _normalize(accessibility, c.median_accessibility_score)
 
-        # Infrastructure: closer to Nairobi (smaller dist) → higher score (inverted)
         raw_infra_dist       = infra_map.get(c.county, max_infra_dist)
         infrastructure_score = 1.0 - _normalize(infra_dists, raw_infra_dist)
 
-        # Proximity: closer to reference city → higher score (inverted)
         raw_prox_dist        = prox_map.get(c.county, max_prox_dist)
         proximity_score      = 1.0 - _normalize(prox_dists, raw_prox_dist)
 
-        # Weighted composite (0-1 scale)
         investment_score = (
-            affordability_score  * W_AFFORDABILITY
-            + amenity_score      * W_AMENITIES
-            + access_score       * W_ACCESSIBILITY
+            affordability_score    * W_AFFORDABILITY
+            + amenity_score        * W_AMENITIES
+            + access_score         * W_ACCESSIBILITY
             + infrastructure_score * W_INFRASTRUCTURE
-            + proximity_score    * W_PROXIMITY
+            + proximity_score      * W_PROXIMITY
         )
 
         scored.append({
             "county": c.county,
-            # Composite
             "investment_score": round(investment_score, 3),
-            # Raw market data
             "median_price_per_acre": c.median_price_per_acre,
             "listing_count": c.listing_count,
-            # Backward-compat fields
             "median_amenities_score": c.median_amenities_score,
             "median_accessibility_score": c.median_accessibility_score,
-            # --- Five 0-1 dimension scores consumed by the stacked bar chart ---
             "affordability_score":  round(affordability_score,  2),
             "amenity_score":        round(amenity_score,         2),
             "access_score":         round(access_score,          2),
@@ -418,12 +406,10 @@ async def get_best_investment(
             "proximity_score":      round(proximity_score,       2),
         })
 
-    # Sort descending by composite and assign ranks
     scored.sort(key=lambda x: x["investment_score"], reverse=True)
     for i, item in enumerate(scored):
         item["rank"] = i + 1
 
-    # Return top 5
     return scored[:5]
 
 
@@ -431,7 +417,7 @@ async def get_raw_proximity_listings(
     db: AsyncSession, county: Optional[str] = None
 ) -> dict:
     """Get raw, unaggregated proximity data for all individual listings."""
-    # 1. Nairobi proximity (Raw)
+    # 1. Nairobi proximity (raw)
     nairobi_query = (
         select(
             HistoricalListing.county,
@@ -456,7 +442,7 @@ async def get_raw_proximity_listings(
         for row in nairobi_result.all()
     ]
 
-    # 2. Reference city proximity (Raw)
+    # 2. Reference city proximity (raw)
     ref_query = (
         select(
             HistoricalListing.county,
