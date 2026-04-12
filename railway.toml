@@ -1,7 +1,5 @@
 [build]
-# Build context is the repo ROOT so ml_models/ is accessible
-# Railway will use this Dockerfile path relative to repo root
-dockerfilePath = "backend/Dockerfile"
+dockerfilePath = "Dockerfile"    
 
 [deploy]
 healthcheckPath = "/api/v1/health"
