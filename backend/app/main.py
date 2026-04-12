@@ -34,8 +34,8 @@ app = FastAPI(
     title="LandIQ Kenya API",
     version=settings.APP_VERSION,
     lifespan=lifespan,
-    docs_url="/docs" if settings.DEBUG else None,
-    redoc_url=None,
+    docs_url="/docs",   # always enabled
+    redoc_url="/redoc", # always enabled
 )
 
 # CORS middleware
