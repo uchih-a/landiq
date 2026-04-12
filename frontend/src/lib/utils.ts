@@ -11,7 +11,7 @@ export function cn(...classes: ClassValue[]): string {
  * Format a number as Kenyan Shillings (KES)
  * Examples: 1234567 → "KES 1.2M", 234000 → "KES 234K", 1234 → "KES 1,234"
  */
-export function formatKES(n: number): string {
+export function formatKES(n: number| null | undefined): string {
   if (n >= 1_000_000_000) {
     return `KES ${(n / 1_000_000_000).toFixed(1)}B`;
   }
