@@ -71,8 +71,6 @@ async def create_prediction(
     log_land_size=result["features"]["log_land_size"],
     amenity_score=request.amenity_score,
     accessibility_score=request.accessibility_score,
-    infrastructure_score=request.infrastructure_score,
-    dist_to_nairobi_km=result["features"]["dist_to_nairobi_km"],
     dist_to_reference_km=result["features"]["dist_to_reference_km"],
     dist_to_city_km=result["features"]["dist_to_city_km"],
     geo_confidence=result["features"]["geocode_confidence"],
