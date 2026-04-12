@@ -3,22 +3,22 @@
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import BigInteger, DateTime, Float, Integer, String, Text, func
+from sqlalchemy import BigInteger, DateTime, Float, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
 
 
 class HistoricalListing(Base):
-    """Historical land listing data — sourced from historical_data table."""
+    """Historical land listing data."""
 
     __tablename__ = "historical_data"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    listing_url: Mapped[Optional[str]] = mapped_column(Text)
+    listing_url: Mapped[Optional[str]] = mapped_column(String(500))
     listing_no: Mapped[Optional[int]] = mapped_column(BigInteger)
-    title: Mapped[Optional[str]] = mapped_column(Text)
-    location: Mapped[Optional[str]] = mapped_column(Text)
+    title: Mapped[Optional[str]] = mapped_column(String(500))
+    location: Mapped[Optional[str]] = mapped_column(String(255))
     prop_type: Mapped[Optional[str]] = mapped_column(String(100))
     list_date: Mapped[Optional[str]] = mapped_column(String(50))
     price_ksh: Mapped[Optional[float]] = mapped_column(Float)
@@ -29,7 +29,7 @@ class HistoricalListing(Base):
     log_size_acres: Mapped[Optional[float]] = mapped_column(Float)
     latitude: Mapped[Optional[float]] = mapped_column(Float)
     longitude: Mapped[Optional[float]] = mapped_column(Float)
-    geocode_source: Mapped[Optional[str]] = mapped_column(String(100))
+    geocode_source: Mapped[Optional[str]] = mapped_column(String(50))
     geocode_confidence: Mapped[Optional[float]] = mapped_column(Float)
     county: Mapped[Optional[str]] = mapped_column(String(100), index=True)
     dist_to_nairobi_km: Mapped[Optional[float]] = mapped_column(Float)
@@ -40,7 +40,7 @@ class HistoricalListing(Base):
     accessibility_score: Mapped[Optional[float]] = mapped_column(Float)
     price_per_acre: Mapped[Optional[float]] = mapped_column(Float, index=True)
     log_price_per_acre: Mapped[Optional[float]] = mapped_column(Float)
-    created_at: Mapped[Optional[datetime]] = mapped_column(
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
 
