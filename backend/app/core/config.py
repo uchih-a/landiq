@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     JWT_SECRET_KEY: str
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_DAYS: int = 7
-    ALLOWED_ORIGINS: List[str] = ["http://localhost:5173"]
+    ALLOWED_ORIGINS: List[str] = ["https://landiq-one.vercel.app"]
     MODEL_DIR: str = "./ml_models"
     NOMINATIM_USER_AGENT: str = "landiq-kenya/1.0"
     APP_ENV: str = "development"
