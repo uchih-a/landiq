@@ -19,11 +19,15 @@ export function useCounties(county?: string | null) {
   });
 }
 
+// useMarketData.ts
+
 export function useSpatialListings(county?: string | null) {
   return useQuery({
     queryKey: ['market', 'spatial', county ?? 'all'],
     queryFn: () => marketApi.spatial(county ?? undefined),
-    staleTime: STALE_TIME,
+    staleTime: 2 * 60 * 1000, // 2 min — map data can refresh more often
+    retry: 1,                  // don't hammer a broken endpoint
+    select: (data) => data ?? [], // guard against null response
   });
 }
 
