@@ -4,16 +4,15 @@
   "installCommand": "npm install",
   "framework": "vite",
   "outputDirectory": "dist",
-  "env": [
-    "VITE_API_URL"
-  ],
-  "envPrefix": "VITE_",
   "regions": ["iad1"],
   "git": {
     "deploymentEnabled": {
       "main": true
     }
   },
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/index.html" }
+  ],
   "headers": [
     {
       "source": "/api/(.*)",
@@ -35,20 +34,6 @@
           "value": "X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization"
         }
       ]
-    }
-  ],
-  "redirects": [
-    {
-      "source": "/api/:path*",
-      "destination": "https://api-landiq.onrender.com/api/:path*"
-    },
-    {
-      "source": "/health",
-      "destination": "https://api-landiq.onrender.com/health"
-    },
-    {
-      "source": "/docs",
-      "destination": "https://api-landiq.onrender.com/docs"
     }
   ]
 }
