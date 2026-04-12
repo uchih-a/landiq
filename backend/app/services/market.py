@@ -1,5 +1,6 @@
 """Market data service for analytics and insights."""
 
+import math
 from typing import List, Optional
 
 from sqlalchemy import func, select
@@ -9,22 +10,45 @@ from app.models.historical import CountyStat, HistoricalListing
 from app.models.prediction import Prediction
 
 
+def _safe_int(value) -> int:
+    """Convert a value to int, returning 0 for None or NaN."""
+    if value is None:
+        return 0
+    try:
+        f = float(value)
+        if math.isnan(f) or math.isinf(f):
+            return 0
+        return int(f)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _safe_float(value) -> Optional[float]:
+    """Convert a value to float, returning None for None or NaN."""
+    if value is None:
+        return None
+    try:
+        f = float(value)
+        if math.isnan(f) or math.isinf(f):
+            return None
+        return f
+    except (TypeError, ValueError):
+        return None
+
+
 async def get_market_summary(
     db: AsyncSession, county: Optional[str] = None
 ) -> dict:
     """Get market summary statistics."""
-    # Base query for historical listings
     listing_query = select(HistoricalListing)
     if county:
         listing_query = listing_query.where(HistoricalListing.county == county)
 
-    # Total listings
     count_result = await db.execute(
         select(func.count()).select_from(listing_query.subquery())
     )
     total_listings = count_result.scalar() or 0
 
-    # Counties covered
     if county:
         counties_covered = 1
     else:
@@ -33,7 +57,6 @@ async def get_market_summary(
         )
         counties_covered = counties_result.scalar() or 0
 
-    # Median price per acre
     median_result = await db.execute(
         select(
             func.percentile_cont(0.5).within_group(
@@ -43,17 +66,15 @@ async def get_market_summary(
         .where(HistoricalListing.price_per_acre.isnot(None))
         .where(HistoricalListing.county == county if county else True)
     )
-    national_median_price = int(median_result.scalar() or 0)
+    national_median_price = _safe_int(median_result.scalar())
 
-    # Average price per acre
     avg_result = await db.execute(
         select(func.avg(HistoricalListing.price_per_acre))
         .where(HistoricalListing.price_per_acre.isnot(None))
         .where(HistoricalListing.county == county if county else True)
     )
-    national_avg_price = int(avg_result.scalar() or 0)
+    national_avg_price = _safe_int(avg_result.scalar())
 
-    # Most expensive county (min 3 listings)
     expensive_result = await db.execute(
         select(CountyStat.county)
         .where(CountyStat.listing_count >= 3)
@@ -62,7 +83,6 @@ async def get_market_summary(
     )
     most_expensive = expensive_result.scalar() or (county or "Nairobi")
 
-    # Best value county (min 5 listings)
     value_result = await db.execute(
         select(CountyStat.county)
         .where(CountyStat.listing_count >= 5)
@@ -71,11 +91,9 @@ async def get_market_summary(
     )
     best_value = value_result.scalar() or (county or "Laikipia")
 
-    # Total predictions made
     predictions_result = await db.execute(select(func.count(Prediction.id)))
     total_predictions = predictions_result.scalar() or 0
 
-    # Last updated
     last_updated_result = await db.execute(
         select(func.max(HistoricalListing.created_at))
     )
@@ -88,7 +106,7 @@ async def get_market_summary(
         "national_avg_price_per_acre": national_avg_price,
         "most_expensive_county": most_expensive,
         "best_value_county": best_value,
-        "ols_r2": 0.71,  # Fixed training metric
+        "ols_r2": 0.71,
         "total_predictions_made": total_predictions,
         "last_updated": last_updated,
     }
@@ -143,11 +161,12 @@ async def get_spatial_listings(
         {
             "latitude": l.latitude,
             "longitude": l.longitude,
-            "price_per_acre": l.price_per_acre,
-            "size_acres": l.size_acres or 1.0,
+            "price_per_acre": _safe_int(l.price_per_acre),
+            "size_acres": _safe_float(l.size_acres) or 1.0,
             "county": l.county or "Unknown",
         }
         for l in listings
+        if _safe_float(l.price_per_acre) is not None
     ]
 
 
@@ -155,7 +174,6 @@ async def get_proximity_data(
     db: AsyncSession, county: Optional[str] = None
 ) -> dict:
     """Get proximity analysis data."""
-    # Nairobi proximity
     nairobi_query = (
         select(
             HistoricalListing.county,
@@ -182,15 +200,15 @@ async def get_proximity_data(
     nairobi_data = [
         {
             "county": row.county,
-            "dist_km": float(row.median_dist),
-            "log_price": float(row.median_log_price),
-            "price_ksh": int(row.median_price),
+            "dist_km": _safe_float(row.median_dist) or 0.0,
+            "log_price": _safe_float(row.median_log_price) or 0.0,
+            "price_ksh": _safe_int(row.median_price),
             "listing_count": row.listing_count,
         }
         for row in nairobi_result.all()
+        if _safe_float(row.median_dist) is not None
     ]
 
-    # Reference city proximity
     ref_query = (
         select(
             HistoricalListing.county,
@@ -217,12 +235,13 @@ async def get_proximity_data(
     ref_data = [
         {
             "county": row.county,
-            "dist_km": float(row.median_dist),
-            "log_price": float(row.median_log_price),
-            "price_ksh": int(row.median_price),
+            "dist_km": _safe_float(row.median_dist) or 0.0,
+            "log_price": _safe_float(row.median_log_price) or 0.0,
+            "price_ksh": _safe_int(row.median_price),
             "listing_count": row.listing_count,
         }
         for row in ref_result.all()
+        if _safe_float(row.median_dist) is not None
     ]
 
     return {"nairobi": nairobi_data, "reference_city": ref_data}
@@ -265,9 +284,9 @@ async def get_score_data(
 
             bins.append({
                 "bin": bin_labels[i],
-                "median_price": int(row.median_price or 0),
-                "q25_price": int(row.q25 or 0),
-                "q75_price": int(row.q75 or 0),
+                "median_price": _safe_int(row.median_price),
+                "q25_price": _safe_int(row.q25),
+                "q75_price": _safe_int(row.q75),
                 "listing_count": row.count or 0,
                 "reliable": (row.count or 0) >= 5,
             })
@@ -291,20 +310,7 @@ def _normalize(values: List[float], value: float) -> float:
 async def get_best_investment(
     db: AsyncSession, county: Optional[str] = None
 ) -> List[dict]:
-    """
-    Get best investment opportunities ranked by a 5-dimension weighted composite score.
-
-    Dimensions and weights (matching chart):
-      - Affordability  (35%): inverse-normalised price — cheaper land scores higher
-      - Amenities      (20%): normalised amenities score
-      - Accessibility  (20%): normalised accessibility score
-      - Infrastructure (15%): normalised road/infrastructure score (uses dist_to_nairobi_km
-                               as a proxy — closer to Nairobi = better infrastructure access)
-      - Proximity      (10%): normalised proximity to reference city (closer = higher score)
-
-    All dimension scores are returned on a 0-1 scale.
-    The weighted composite (investment_score) is also on a 0-1 scale.
-    """
+    """Get best investment opportunities ranked by a 5-dimension weighted composite score."""
     query = (
         select(CountyStat)
         .where(CountyStat.listing_count >= 5)
@@ -321,14 +327,10 @@ async def get_best_investment(
     if not counties:
         return []
 
-    # ------------------------------------------------------------------ #
-    # Collect raw values for cross-county normalisation
-    # ------------------------------------------------------------------ #
     prices        = [c.median_price_per_acre for c in counties]
     amenities     = [c.median_amenities_score for c in counties]
     accessibility = [c.median_accessibility_score for c in counties]
 
-    # Infrastructure proxy: median distance to Nairobi per county.
     infra_query = (
         select(
             HistoricalListing.county,
@@ -342,7 +344,6 @@ async def get_best_investment(
     infra_result = await db.execute(infra_query)
     infra_map    = {row.county: float(row.median_infra_dist) for row in infra_result.all()}
 
-    # Proximity proxy: median distance to reference city per county.
     prox_query = (
         select(
             HistoricalListing.county,
@@ -356,16 +357,12 @@ async def get_best_investment(
     prox_result = await db.execute(prox_query)
     prox_map    = {row.county: float(row.median_prox_dist) for row in prox_result.all()}
 
-    # Fill missing counties with the worst-case distance so they rank lowest
     max_infra_dist = max(infra_map.values(), default=0.0)
     max_prox_dist  = max(prox_map.values(), default=0.0)
 
     infra_dists = [infra_map.get(c.county, max_infra_dist) for c in counties]
     prox_dists  = [prox_map.get(c.county, max_prox_dist)  for c in counties]
 
-    # ------------------------------------------------------------------ #
-    # Score each county
-    # ------------------------------------------------------------------ #
     W_AFFORDABILITY  = 0.35
     W_AMENITIES      = 0.20
     W_ACCESSIBILITY  = 0.20
@@ -417,7 +414,6 @@ async def get_raw_proximity_listings(
     db: AsyncSession, county: Optional[str] = None
 ) -> dict:
     """Get raw, unaggregated proximity data for all individual listings."""
-    # 1. Nairobi proximity (raw)
     nairobi_query = (
         select(
             HistoricalListing.county,
@@ -435,14 +431,14 @@ async def get_raw_proximity_listings(
     nairobi_data = [
         {
             "county": row.county,
-            "dist_km": float(row.dist_km),
-            "log_price": float(row.log_price),
-            "price_ksh": int(row.price_ksh),
+            "dist_km": _safe_float(row.dist_km) or 0.0,
+            "log_price": _safe_float(row.log_price) or 0.0,
+            "price_ksh": _safe_int(row.price_ksh),
         }
         for row in nairobi_result.all()
+        if _safe_float(row.price_ksh) is not None
     ]
 
-    # 2. Reference city proximity (raw)
     ref_query = (
         select(
             HistoricalListing.county,
@@ -460,11 +456,12 @@ async def get_raw_proximity_listings(
     ref_data = [
         {
             "county": row.county,
-            "dist_km": float(row.dist_km),
-            "log_price": float(row.log_price),
-            "price_ksh": int(row.price_ksh),
+            "dist_km": _safe_float(row.dist_km) or 0.0,
+            "log_price": _safe_float(row.log_price) or 0.0,
+            "price_ksh": _safe_int(row.price_ksh),
         }
         for row in ref_result.all()
+        if _safe_float(row.price_ksh) is not None
     ]
 
     return {"nairobi": nairobi_data, "reference_city": ref_data}
