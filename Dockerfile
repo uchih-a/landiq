@@ -5,7 +5,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends gcc libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Path is now just requirements.txt (relative to backend/)
-COPY requirements.txt .
+COPY backend/requirements.txt .
 RUN pip install --upgrade pip \
     && pip install --prefix=/install --no-cache-dir \
     --extra-index-url https://download.pytorch.org/whl/cpu \
@@ -19,9 +19,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends libpq5 \
 COPY --from=builder /install /usr/local
 
 # Paths relative to backend/ now
-COPY app/ ./app/
-COPY alembic/ ./alembic/
-COPY alembic.ini .
+COPY backend/app/ ./app/
+COPY backend/alembic/ ./alembic/
+COPY backend/alembic.ini .
 COPY ml_models/ ./ml_models/
 
 RUN useradd -m -u 1001 appuser && chown -R appuser:appuser /app
