@@ -39,13 +39,17 @@ app = FastAPI(
 )
 
 # CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.ALLOWED_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+from fastapi import Request
+from fastapi.responses import JSONResponse
+
+@app.middleware("http")
+async def cors_on_errors(request: Request, call_next):
+    response = await call_next(request)
+    origin = request.headers.get("origin", "")
+    if origin in settings.ALLOWED_ORIGINS:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+    return response
 
 # Include API router
 app.include_router(api_router, prefix="/api/v1")
