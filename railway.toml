@@ -1,0 +1,11 @@
+[build]
+# Build context is the repo ROOT so ml_models/ is accessible
+# Railway will use this Dockerfile path relative to repo root
+dockerfilePath = "backend/Dockerfile"
+
+[deploy]
+startCommand = "uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 2"
+healthcheckPath = "/api/v1/health"
+healthcheckTimeout = 300
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 3
