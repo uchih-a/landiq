@@ -25,10 +25,6 @@ export function EstimatePage() {
     <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8">
       {/* Header */}
       <div className="mb-8">
-        <div className="flex items-center gap-2 mb-2">
-          <span className="badge-amber text-xs">BETA MODEL</span>
-          <span className="text-[var(--text-muted)] text-sm">OLS R² = 0.71</span>
-        </div>
         <h1 className="font-serif text-3xl md:text-4xl font-bold text-[var(--text-primary)]">
           Land Valuation Estimator
         </h1>
