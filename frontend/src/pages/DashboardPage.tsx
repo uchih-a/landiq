@@ -23,7 +23,7 @@ export function DashboardPage() {
           Dashboard
         </h1>
         <p className="text-[var(--text-secondary)] mt-2">
-          Aggregated insights from 796 listings across 30 Kenyan counties
+          Aggregated insights from 5,875 listings across 39 Kenyan counties
         </p>
       </div>
 
