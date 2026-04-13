@@ -218,7 +218,7 @@ export function AboutPage() {
               <LimitationCard
                 icon={<AlertTriangle className="h-5 w-5 text-alert" />}
                 title="Training Data Coverage"
-                description="Model is trained on ~3,800 usable listings after cleaning. Sparsely listed counties such as Mandera or Turkana carry higher prediction variance."
+                description="Model is trained on ~5,800 usable listings after cleaning. Sparsely listed counties such as Mandera or Turkana carry higher prediction variance."
               />
               <LimitationCard
                 icon={<AlertTriangle className="h-5 w-5 text-earth" />}
