@@ -163,11 +163,6 @@ export function CityProximityChart() {
         </h3>
         <p className="text-sm text-gray-600 text-center mt-1">
           <span className="inline-flex items-center">
-            <span className="w-3 h-3 rounded-full bg-blue-600 mr-1"></span>
-            Blue = parcels referenced to Nairobi
-          </span>
-          <span className="mx-2">|</span>
-          <span className="inline-flex items-center">
             <span className="w-3 h-3 rounded-full bg-orange-500 mr-1"></span>
             Orange = parcels referenced to county town
           </span>
@@ -176,9 +171,6 @@ export function CityProximityChart() {
 
       {/* Stats box like in the image */}
       <div className="absolute top-4 right-4 bg-white/90 border border-gray-300 rounded-md p-3 shadow-sm z-10 text-xs">
-        <div className="font-semibold text-gray-700 mb-2 border-b border-gray-200 pb-1">
-          (blue = Nairobi counties, orange = others)
-        </div>
         <div className="text-gray-600">
           <div>Nairobi reference (n={stats.nairobiN})</div>
           <div>County town reference (n={stats.countyN})</div>
