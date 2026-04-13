@@ -1,6 +1,6 @@
 # LandIQ Kenya
 
-AI-powered land valuation platform for Kenya. Get bank-grade land valuations in seconds using our MLP neural network model trained on 796+ historical listings across 30 counties.
+AI-powered land valuation platform for Kenya. Get bank-grade land valuations in seconds using our MLP neural network model trained on 5796+ historical listings across 30 counties.
 
 ## Features
 
