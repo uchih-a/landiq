@@ -1,13 +1,63 @@
-**/.env
-!**/.env.example
-!ml_models/.gitkeep
+# Python
 __pycache__/
 *.py[cod]
-.pytest_cache/
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# Virtual environments
 .venv/
+venv/
+env/
+
+# uv (lock file IS committed — do NOT ignore uv.lock)
+# .venv is already covered above
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Artifacts — model files, spatial data, exports (too large for git)
+artifacts/*
+!artifacts/README.md
+
+# Pytest / coverage
+.pytest_cache/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+
+# Mypy / Ruff
+.mypy_cache/
+.ruff_cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Podman / Docker
+.Containerfile*
+
+# Node (frontend)
 node_modules/
 frontend/dist/
-postgres_data/
-.DS_Store
-*.swp
+frontend/.vite/
 
+# Frontend env
+frontend/.env
+frontend/.env.*
+!frontend/.env.example

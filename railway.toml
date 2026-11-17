@@ -1,9 +1,0 @@
-[build]
-dockerfilePath = "/Dockerfile"
-# No buildContext needed — Railway uses backend/ as context automatically
-
-[deploy]
-healthcheckPath = "/api/v1/health"
-healthcheckTimeout = 300
-restartPolicyType = "on_failure"
-restartPolicyMaxRetries = 3

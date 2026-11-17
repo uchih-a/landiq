@@ -1,190 +1,78 @@
-# LandIQ Kenya
+# Kenya Land Valuation
 
-AI-powered land valuation platform for Kenya. Get bank-grade land valuations in seconds using our MLP neural network model trained on 5796+ historical listings across 30 counties.
+A full-stack land valuation platform for the Kenyan market: ensemble ML
+predictions, market analytics, deal finding, and model explainability.
 
-## Features
+## Repository layout
 
-- **AI-Powered Valuations**: MLP neural network model with 71% R² accuracy
-- **Geospatial Analysis**: Interactive maps showing land price distributions
-- **Market Insights**: County-level statistics and investment opportunity rankings
-- **User Authentication**: Secure JWT-based authentication
-- **Prediction History**: Track and manage your land valuations
+```
+kenya-land-valuation/
+├── backend/           FastAPI backend (Python, uv, Railway)
+│   ├── app/           API routers, services, schemas, core
+│   ├── tests/         pytest suite (174 tests)
+│   ├── README.md      Backend setup + architecture
+│   └── ...
+├── frontend/          Vite + React + TS frontend (Vercel)
+│   ├── src/           App shell, design system, 8 screens, API client
+│   ├── README.md      Frontend setup + structure
+│   └── ...
+├── src/landval/       Shared Python library (features, modelling)
+├── docs/              Architecture, ADRs, API docs, known-gaps.md
+├── artifacts/         Model + spatial data (git-ignored, mounted at runtime)
+├── scripts/           Extraction + validation scripts
+├── pyproject.toml     Backend project metadata + pinned deps
+├── uv.lock            Backend lockfile (committed)
+├── Dockerfile         Multi-stage container (uv-based)
+├── Makefile           dev, test, lint, format, container, validate-version
+├── .github/workflows/ ci.yml (backend) + ci-frontend.yml (frontend)
+└── .gitignore         Covers both Python and Node artifacts
+```
 
-## Tech Stack
+## Quick start
 
 ### Backend
-- **Framework**: FastAPI (Python)
-- **Database**: PostgreSQL with SQLAlchemy ORM
-- **ML**: PyTorch (CPU-only), scikit-learn
-- **Authentication**: JWT with bcrypt
-- **Migrations**: Alembic
+
+```bash
+uv sync --extra dev
+cp .env.example .env
+make dev          # → http://localhost:8000/docs
+make test
+make lint
+```
 
 ### Frontend
-- **Framework**: React 18 with TypeScript
-- **Styling**: Tailwind CSS
-- **State Management**: Zustand
-- **Data Fetching**: TanStack Query (React Query)
-- **Charts**: Recharts, deck.gl
-- **Maps**: MapLibre GL
-
-## Prerequisites
-
-- Docker Desktop
-- Node.js 20+ (for local frontend development)
-- Python 3.11+ (for local backend development)
-
-## Setup
-
-### 1. Clone and Navigate
 
 ```bash
-git clone <repository-url>
-cd landiq-kenya
-```
-
-### 2. Copy Model Artifacts
-
-Place your model files in the `ml_models/` directory:
-- `mlp_model.pt` - PyTorch model weights
-- `mlp_scaler.pkl` - Feature scaler
-- `mlp_feature_list.pkl` - Feature name list
-- `mlp_hidden_layers.pkl` - Model architecture
-
-```bash
-cp /path/to/your/models/* ml_models/
-```
-
-### 3. Configure Environment
-
-```bash
-cp backend/.env.example backend/.env
-# Edit backend/.env and set a secure JWT_SECRET_KEY (min 32 characters)
-```
-
-### 4. Start the Application
-
-```bash
-chmod +x scripts/start.sh
-./scripts/start.sh
-```
-
-This will:
-- Build Docker images
-- Start PostgreSQL database
-- Run database migrations
-- Start backend, frontend, and nginx services
-
-### 5. Seed Historical Data (Optional)
-
-```bash
-# After the application is running
-python scripts/seed_historical.py --parquet /path/to/your/data.parquet
-```
-
-## Service URLs
-
-After starting the application:
-
-- **Frontend**: http://localhost:5173
-- **API**: http://localhost:8000
-- **API Docs**: http://localhost:8000/docs
-- **Via Nginx**: http://localhost
-
-## Running Tests
-
-### Backend Tests
-
-```bash
-cd backend
-pip install -r requirements-dev.txt
-pytest
-```
-
-### Frontend Type Check
-
-```bash
-cd frontend
+cd frontend/
 npm install
-npm run type-check
+npm run dev       # → http://localhost:5173
+npm run build
+npm run lint
 ```
 
-## Project Structure
+The frontend dev server proxies `/api` to `http://localhost:8000` (the
+backend's default port), so both can run locally without CORS issues during
+development.
 
-```
-landiq-kenya/
-├── backend/              # FastAPI backend
-│   ├── app/
-│   │   ├── api/         # API endpoints
-│   │   ├── core/        # Config, security
-│   │   ├── db/          # Database session
-│   │   ├── models/      # SQLAlchemy models
-│   │   ├── schemas/     # Pydantic schemas
-│   │   └── services/    # Business logic
-│   ├── alembic/         # Database migrations
-│   └── tests/           # Test suite
-├── frontend/            # React frontend
-│   ├── src/
-│   │   ├── components/  # React components
-│   │   ├── hooks/       # Custom hooks
-│   │   ├── lib/         # Utilities, API client
-│   │   ├── pages/       # Page components
-│   │   ├── store/       # Zustand stores
-│   │   └── types/       # TypeScript types
-│   └── public/          # Static assets
-├── ml_models/           # Model artifacts (gitignored)
-├── nginx/               # Nginx configuration
-└── scripts/             # Utility scripts
-```
+## Deployment
 
-## API Endpoints
+- **Backend**: Railway (Docker image via `Dockerfile`)
+- **Frontend**: Vercel (Vite build via `frontend/`)
+- CORS: backend's `ALLOWED_ORIGINS` must include the frontend's deployed
+  origin. For local dev, both `http://localhost:3000` and
+  `http://localhost:5173` are pre-configured in `.env.example`.
 
-### Authentication
-- `POST /api/v1/auth/register` - Register new user
-- `POST /api/v1/auth/login` - Login
-- `GET /api/v1/auth/me` - Get current user
+See `docs/deploy_railway_vercel.md` for detailed deployment instructions.
 
-### Predictions
-- `POST /api/v1/predict` - Create land valuation (authenticated)
-- `GET /api/v1/predict/history` - Get prediction history (authenticated)
+## Artifacts
 
-### Market Data (Public)
-- `GET /api/v1/market/summary` - Market summary
-- `GET /api/v1/market/counties` - County statistics
-- `GET /api/v1/market/spatial` - Spatial listing data
-- `GET /api/v1/market/proximity` - Proximity analysis
-- `GET /api/v1/market/scores` - Score analysis
-- `GET /api/v1/market/best-investment` - Investment rankings
+Model files and spatial data are **not committed** to git. Place them in
+`artifacts/` (see `artifacts/README.md`). The backend enters "degraded"
+mode without them — `/health` returns `status: degraded` and data
+endpoints return 503 `DATA_UNAVAILABLE`, but the API still starts.
 
-## Environment Variables
+## Known gaps
 
-### Backend (.env)
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `DATABASE_URL` | PostgreSQL connection URL | - |
-| `JWT_SECRET_KEY` | Secret key for JWT (min 32 chars) | - |
-| `JWT_ALGORITHM` | JWT algorithm | HS256 |
-| `ACCESS_TOKEN_EXPIRE_DAYS` | Token expiry in days | 7 |
-| `ALLOWED_ORIGINS` | CORS allowed origins | ["http://localhost:5173"] |
-| `MODEL_DIR` | Path to model artifacts | ./ml_models |
-| `APP_ENV` | Application environment | development |
-| `DEBUG` | Enable debug mode | true |
-
-### Frontend (.env)
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `VITE_API_URL` | Backend API URL | http://localhost:8000 |
-
-## License
-
-MIT License - see LICENSE file for details.
-
-## Acknowledgements
-
-- Property24 Kenya for listing data
-- OpenStreetMap for geocoding and amenities data
-- Kenya National Bureau of Statistics for county boundaries
-# landiq
-# landiq
-# landiq
+See `docs/known-gaps.md` for the consolidated list of every reported gap,
+approximation, and deliberate tradeoff across all build phases (B0-B12,
+F0-F10).

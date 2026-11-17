@@ -1,0 +1,88 @@
+/**
+ * DriversList — "What drives this price" horizontal bar list.
+ *
+ * Renders `response.explanation.drivers` (DriverContribution[]) as a list of
+ * horizontal bars. Each bar shows:
+ *   - the feature label
+ *   - a colored bar whose width is proportional to |effect_pct| (relative to
+ *     the largest driver in the displayed set)
+ *   - the effect_pct value with sign (+ / -)
+ *
+ * Per the spec: top 5 drivers sorted by |shap_value| descending. The backend
+ * already returns drivers sorted by |shap_value|, but we re-sort defensively
+ * in case a future caller passes an unsorted list.
+ *
+ * Color rule (per 02_predictor_reliable/code.html design):
+ *   - direction === 'price-increasing' → primary-container (#E8742A orange)
+ *     — the brand's primary accent, NOT green. The design uses orange for
+ *     positive drivers and a tempered slate for negative ones, avoiding the
+ *     green=good/red=bad convention in favor of a more analytical tone.
+ *   - direction === 'price-decreasing' → #6B7A90 (market-neutral / Tempered
+ *     slate) — a neutral, non-alarming color. Label text also shifts to
+ *     text-secondary (lighter) for negative drivers, matching the design.
+ *   - direction === 'neutral'           → market-caution (#E3A008 amber)
+ */
+import type { DriverContribution } from '@/lib/api/types';
+
+interface DriversListProps {
+  drivers: DriverContribution[];
+  /** Max number of drivers to show (default 5 per spec). */
+  limit?: number;
+}
+
+const NEUTRAL_COLOR = 'bg-market-caution';
+const NEUTRAL_TEXT = 'text-market-caution';
+
+function colorFor(d: DriverContribution): { bar: string; text: string; label: string } {
+  if (d.direction === 'price-increasing') {
+    // Design: positive drivers use primary-container orange
+    return { bar: 'bg-primary-container', text: 'text-primary-container', label: 'text-on-surface' };
+  }
+  if (d.direction === 'price-decreasing') {
+    // Design: negative drivers use #6B7A90 tempered slate + lighter label
+    return { bar: 'bg-[#6B7A90]', text: 'text-[#6B7A90]', label: 'text-secondary' };
+  }
+  return { bar: NEUTRAL_COLOR, text: NEUTRAL_TEXT, label: 'text-on-surface' };
+}
+
+export function DriversList({ drivers, limit = 5 }: DriversListProps) {
+  const sorted = [...drivers]
+    .sort((a, b) => Math.abs(b.shap_value) - Math.abs(a.shap_value))
+    .slice(0, limit);
+
+  if (sorted.length === 0) {
+    return (
+      <p className="text-caption-sm text-secondary">No driver breakdown available.</p>
+    );
+  }
+
+  const maxAbs = Math.max(1, ...sorted.map((d) => Math.abs(d.effect_pct)));
+
+  return (
+    <div className="flex flex-col gap-4">
+      {sorted.map((d) => {
+        const widthPct = Math.min(100, (Math.abs(d.effect_pct) / maxAbs) * 100);
+        const colors = colorFor(d);
+        const sign = d.effect_pct >= 0 ? '+' : '';
+        return (
+          <div key={d.feature} className="flex flex-col gap-1.5">
+            <div className="flex items-center justify-between gap-2 text-label-metric font-label-metric">
+              <span className={`${colors.label} truncate`}>{d.label}</span>
+              <span className={`${colors.text} font-medium whitespace-nowrap`}>
+                {sign}
+                {d.effect_pct.toFixed(1)}%
+              </span>
+            </div>
+            <div className="h-2 w-full bg-surface-container-highest rounded-full overflow-hidden">
+              <div
+                className={`h-full rounded-full ${colors.bar} transition-all duration-500 ease-out`}
+                style={{ width: `${widthPct}%` }}
+                role="presentation"
+              />
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}

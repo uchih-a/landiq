@@ -1,0 +1,3052 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Kenya Land Valuation API",
+    "description": "Backend API for the Kenya land valuation app.  Provides price-per-acre predictions, market insights, and model explainability for Kenyan land parcels.",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/v1/health": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Health",
+        "description": "Liveness + readiness probe.\n\nReturns ``status: ok`` when all artifacts are loaded **and** the model\nregistry successfully loaded the ensemble (so ``/api/v1/predict`` is\nusable).  ``degraded`` covers two cases:\n\n1. The ``ArtifactRegistry`` (B0) found a missing top-level file\n   (``xgb_model.json``, ``preprocessing.json``, \u2026).\n2. The ``ModelRegistry`` (this phase) raised ``ModelLoadError`` \u2014\n   typically because ``serving_manifest.json`` or one of the model\n   files it lists is missing, or because the feature pipeline's\n   ``scoring_params.json`` / ``reference_data.json`` /\n   ``feature_manifest.json`` are absent.\n\nIn both cases the app still starts so ``/docs`` and the test suite\nwork without the large model files.",
+        "operationId": "health_api_v1_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/meta": {
+      "get": {
+        "tags": [
+          "meta"
+        ],
+        "summary": "Meta",
+        "description": "Return lightweight artifact metadata.\n\nWhen artifacts are not loaded (degraded mode) all fields are ``null``.",
+        "operationId": "meta_api_v1_meta_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetaResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/predict": {
+      "post": {
+        "tags": [
+          "predict"
+        ],
+        "summary": "Predict",
+        "description": "Predict the price per acre of a Kenyan land parcel.\n\nReturns 503 ``MODEL_NOT_LOADED`` when the ensemble is not loaded\n(degraded mode \u2014 copy the artefacts into ``ARTIFACTS_DIR`` and restart).\nThe live explanation and comparables blocks are added when their\nrespective services are available; they degrade to ``null`` / ``[]``\nindependently (e.g. when ``listings_scored.parquet`` is missing the\nprediction still returns, just without comparables).",
+        "operationId": "predict_api_v1_predict_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PredictRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PredictResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/counties/summary": {
+      "get": {
+        "tags": [
+          "market-insights"
+        ],
+        "summary": "County Summary",
+        "description": "One row per county, sorted by listing count descending (Cell 9.5).\n\n**This is the single source of truth for medians / IQR** \u2014 the per-listing\nendpoint does NOT recompute them, to avoid two sources of truth drifting apart.",
+        "operationId": "county_summary_api_v1_counties_summary_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CountySummaryResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/counties/boundaries": {
+      "get": {
+        "tags": [
+          "market-insights"
+        ],
+        "summary": "County Boundaries",
+        "description": "Simplified GeoJSON of Kenya's 47 county boundaries for the choropleth.\n\nReturns the raw GeoJSON (cached at startup).  The GeoJSON is simplified\nvia Douglas-Peucker (tolerance reported in the manifest) to keep the\nfile light for page-load rendering.",
+        "operationId": "county_boundaries_api_v1_counties_boundaries_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response County Boundaries Api V1 Counties Boundaries Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/counties/row_counts": {
+      "get": {
+        "tags": [
+          "market-insights"
+        ],
+        "summary": "County Row Counts",
+        "description": "Per-county listing counts from ``listings_scored.parquet`` \u2014 for the\nscatter-plot tab's county picker + the \"N listings\" label.\n\nThis does NOT return medians (those come from /counties/summary).  It\nonly reports how many listings each county has in the per-listing\nendpoint's backing frame, so the frontend can warn when a county's\ncoverage is thin.",
+        "operationId": "county_row_counts_api_v1_counties_row_counts_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CountyRowCountsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/counties/{county}/listings": {
+      "get": {
+        "tags": [
+          "market-insights"
+        ],
+        "summary": "County Listings",
+        "description": "Per-listing scatter-plot data for one county.\n\nReturns ``price_per_acre_ksh``, ``dist_to_nairobi_km`` (recomputed from\nlat/lon via B1's haversine), ``size_acres``, and ``verdict`` for each\nlisting in the county.  Backed by ``listings_scored.parquet`` (Cell 9.6)\n\u2014 the only export that carries ``listed_price_per_acre_ksh`` +\n``size_acres`` together.  The prediction parquets (oof/test) lack\n``size_acres`` and only carry ``y_true`` (log scale), not the asking\nprice per acre.\n\n**Medians / IQR for the ranked list and deep-dive cards come from\n/counties/summary (county_summary.csv) \u2014 this endpoint does NOT\nrecompute them.**",
+        "operationId": "county_listings_api_v1_counties__county__listings_get",
+        "parameters": [
+          {
+            "name": "county",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "County"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Page number (1-indexed)",
+              "default": 1,
+              "title": "Page"
+            },
+            "description": "Page number (1-indexed)"
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "description": "Rows per page (default 50, max 200)",
+              "default": 50,
+              "title": "Page Size"
+            },
+            "description": "Rows per page (default 50, max 200)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CountyListingsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/model/metrics": {
+      "get": {
+        "tags": [
+          "model"
+        ],
+        "summary": "Model Metrics",
+        "description": "CV + test metrics with bootstrap CIs, ensemble weights, interval coverage.",
+        "operationId": "model_metrics_api_v1_model_metrics_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetricsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/model/feature-evaluation": {
+      "get": {
+        "tags": [
+          "model"
+        ],
+        "summary": "Feature Evaluation",
+        "description": "Phase 3 ranked feature table (Cell 3.8, written by Cell 9.3).",
+        "operationId": "feature_evaluation_api_v1_model_feature_evaluation_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeatureEvaluationResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/model/explainability": {
+      "get": {
+        "tags": [
+          "model"
+        ],
+        "summary": "Explainability",
+        "description": "Global mean-|SHAP| + native & permutation importance + feature labels.",
+        "operationId": "explainability_api_v1_model_explainability_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExplainabilityResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/model/predictions": {
+      "get": {
+        "tags": [
+          "model"
+        ],
+        "summary": "Model Predictions",
+        "description": "Per-listing actual vs. predicted values for both splits.\n\nReturns both the development-set out-of-fold predictions and the test-set\npredictions in one payload.  Each row carries the identifier columns\n(listing_url, listing_no, county, prop_type, etc.) so the frontend can\nlink a scatter point back to its listing.",
+        "operationId": "model_predictions_api_v1_model_predictions_get",
+        "parameters": [
+          {
+            "name": "sample",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 10000,
+                  "minimum": 10
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "If set, return a deterministic random sample of this many rows from each split (oof + test) rather than every row.  Useful for scatter plots where the full row count would be wasteful.  The sample is deterministic (seed=42) so the same request always returns the same rows.",
+              "title": "Sample"
+            },
+            "description": "If set, return a deterministic random sample of this many rows from each split (oof + test) rather than every row.  Useful for scatter plots where the full row count would be wasteful.  The sample is deterministic (seed=42) so the same request always returns the same rows."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelPredictionsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/model/error-by-support": {
+      "get": {
+        "tags": [
+          "model"
+        ],
+        "summary": "Error By Support",
+        "description": "OOF error broken down by listing-count support bands.\n\nReturns ``error_by_support.csv`` (Cell 9.9) \u2014 two groups of bands:\n- ``county_listings``: error by the number of listings in the county\n  (<10 / 10-19 / 20-49 / 50+)\n- ``nearby_within_50km``: error by the number of listings within 50km\n  (<5 / 5-9 / 10-19 / 20-49 / 50+)",
+        "operationId": "error_by_support_api_v1_model_error_by_support_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBySupportResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/places/search": {
+      "get": {
+        "tags": [
+          "places"
+        ],
+        "summary": "Search Places",
+        "description": "Typeahead search over the places gazetteer.",
+        "operationId": "search_places_api_v1_places_search_get",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Search query (substring, case-insensitive)",
+              "title": "Q"
+            },
+            "description": "Search query (substring, case-insensitive)"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 50,
+              "minimum": 1,
+              "description": "Max results (default 10)",
+              "default": 10,
+              "title": "Limit"
+            },
+            "description": "Max results (default 10)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlaceSearchResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/places/nearby": {
+      "get": {
+        "tags": [
+          "places"
+        ],
+        "summary": "Nearby Pois",
+        "description": "Named POIs within radius_km of a coordinate.",
+        "operationId": "nearby_pois_api_v1_places_nearby_get",
+        "parameters": [
+          {
+            "name": "lat",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "number",
+              "maximum": 90.0,
+              "minimum": -90.0,
+              "description": "Latitude (WGS84)",
+              "title": "Lat"
+            },
+            "description": "Latitude (WGS84)"
+          },
+          {
+            "name": "lon",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "number",
+              "maximum": 180.0,
+              "minimum": -180.0,
+              "description": "Longitude (WGS84)",
+              "title": "Lon"
+            },
+            "description": "Longitude (WGS84)"
+          },
+          {
+            "name": "radius_km",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "maximum": 50.0,
+              "exclusiveMinimum": 0.0,
+              "description": "Search radius in km (default 5)",
+              "default": 5.0,
+              "title": "Radius Km"
+            },
+            "description": "Search radius in km (default 5)"
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "hospital",
+                    "school",
+                    "market",
+                    "bank",
+                    "police",
+                    "bus_stop",
+                    "fuel"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter to one category (hospital/school/market/bank/police/bus_stop/fuel)",
+              "title": "Category"
+            },
+            "description": "Filter to one category (hospital/school/market/bank/police/bus_stop/fuel)"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "description": "Max POIs to return (default 20)",
+              "default": 20,
+              "title": "Limit"
+            },
+            "description": "Max POIs to return (default 20)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NearbyPOIsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/listings/scored": {
+      "get": {
+        "tags": [
+          "deal-finder"
+        ],
+        "summary": "Listings Scored",
+        "description": "Paginated + filtered Deal Finder table.",
+        "operationId": "listings_scored_api_v1_listings_scored_get",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Page number (1-indexed)",
+              "default": 1,
+              "title": "Page"
+            },
+            "description": "Page number (1-indexed)"
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "description": "Rows per page",
+              "default": 50,
+              "title": "Page Size"
+            },
+            "description": "Rows per page"
+          },
+          {
+            "name": "county",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Case-insensitive substring filter",
+              "title": "County"
+            },
+            "description": "Case-insensitive substring filter"
+          },
+          {
+            "name": "prop_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Case-insensitive substring filter",
+              "title": "Prop Type"
+            },
+            "description": "Case-insensitive substring filter"
+          },
+          {
+            "name": "verdict",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "One of 'underpriced', 'fair', 'overpriced'",
+              "title": "Verdict"
+            },
+            "description": "One of 'underpriced', 'fair', 'overpriced'"
+          },
+          {
+            "name": "scored_by",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "One of 'oof' (development) or 'test'",
+              "title": "Scored By"
+            },
+            "description": "One of 'oof' (development) or 'test'"
+          },
+          {
+            "name": "data_quality_flag",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "true = only flagged rows (outside the dev 1st-99th percentile); false = only clean rows; absent = both.",
+              "title": "Data Quality Flag"
+            },
+            "description": "true = only flagged rows (outside the dev 1st-99th percentile); false = only clean rows; absent = both."
+          },
+          {
+            "name": "near_amenity",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "school",
+                    "hospital",
+                    "tarmac_road"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter to listings within radius_km of an amenity \u2014 one of 'school', 'hospital', 'tarmac_road'.  Recomputes the per-listing distance from stored lat/lon via B1's BallTrees (raw distances did not survive into listings_scored.parquet).",
+              "title": "Near Amenity"
+            },
+            "description": "Filter to listings within radius_km of an amenity \u2014 one of 'school', 'hospital', 'tarmac_road'.  Recomputes the per-listing distance from stored lat/lon via B1's BallTrees (raw distances did not survive into listings_scored.parquet)."
+          },
+          {
+            "name": "radius_km",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Radius (km) for the near_amenity filter \u2014 one of 1, 3, 5.",
+              "title": "Radius Km"
+            },
+            "description": "Radius (km) for the near_amenity filter \u2014 one of 1, 3, 5."
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Sort key: 'listed_over_predicted' (default, ascending \u2014 most underpriced first), 'listed_price_per_acre_ksh', 'predicted_price_per_acre_ksh', 'size_acres'.",
+              "default": "listed_over_predicted",
+              "title": "Sort"
+            },
+            "description": "Sort key: 'listed_over_predicted' (default, ascending \u2014 most underpriced first), 'listed_price_per_acre_ksh', 'predicted_price_per_acre_ksh', 'size_acres'."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListingsScoredResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/data/price-distribution": {
+      "get": {
+        "tags": [
+          "data"
+        ],
+        "summary": "Price Distribution",
+        "description": "Log-scale price histogram + percentiles over the usable listings.",
+        "operationId": "price_distribution_api_v1_data_price_distribution_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PriceDistributionResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ComparableListingResponse": {
+        "properties": {
+          "listing_no": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Listing No"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location"
+          },
+          "county": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "County"
+          },
+          "size_acres": {
+            "type": "number",
+            "title": "Size Acres"
+          },
+          "listed_price_per_acre_ksh": {
+            "type": "number",
+            "title": "Listed Price Per Acre Ksh"
+          },
+          "predicted_price_per_acre_ksh": {
+            "type": "number",
+            "title": "Predicted Price Per Acre Ksh"
+          },
+          "verdict": {
+            "type": "string",
+            "title": "Verdict",
+            "description": "'underpriced' / 'fair' / 'overpriced'"
+          },
+          "distance_km": {
+            "type": "number",
+            "title": "Distance Km",
+            "description": "Haversine distance from the predicted point"
+          }
+        },
+        "type": "object",
+        "required": [
+          "listing_no",
+          "title",
+          "location",
+          "county",
+          "size_acres",
+          "listed_price_per_acre_ksh",
+          "predicted_price_per_acre_ksh",
+          "verdict",
+          "distance_km"
+        ],
+        "title": "ComparableListingResponse",
+        "description": "One nearby listing returned as a comparable.\n\nNote: ``list_date`` / ``days_ago`` is intentionally OMITTED \u2014 Notebook\n1's ``list_date`` is empty for every listing, so fabricating a value\nwould mislead the user.  See the comparables.py docstring."
+      },
+      "CountyListingScatterRow": {
+        "properties": {
+          "listing_no": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Listing No"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "latitude": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latitude"
+          },
+          "longitude": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Longitude"
+          },
+          "listed_price_per_acre_ksh": {
+            "type": "number",
+            "title": "Listed Price Per Acre Ksh"
+          },
+          "dist_to_nairobi_km": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dist To Nairobi Km",
+            "description": "Haversine distance to Nairobi CBD (recomputed from lat/lon via B1's haversine_km_vectorised \u2014 Cell 4.2's formula, same earth radius 6371.0 km).  Null when the listing's coordinates are missing."
+          },
+          "size_acres": {
+            "type": "number",
+            "title": "Size Acres"
+          },
+          "verdict": {
+            "type": "string",
+            "title": "Verdict",
+            "description": "'underpriced' / 'fair' / 'overpriced'"
+          },
+          "data_quality_flag": {
+            "type": "boolean",
+            "title": "Data Quality Flag"
+          }
+        },
+        "type": "object",
+        "required": [
+          "listing_no",
+          "title",
+          "latitude",
+          "longitude",
+          "listed_price_per_acre_ksh",
+          "size_acres",
+          "verdict",
+          "data_quality_flag"
+        ],
+        "title": "CountyListingScatterRow",
+        "description": "One row of GET /api/v1/counties/{county}/listings \u2014 the scatter-plot fields.\n\n``listed_price_per_acre_ksh`` and ``size_acres`` come directly from\n``listings_scored.parquet`` (Cell 9.6).  ``dist_to_nairobi_km`` is\nrecomputed from the stored lat/lon via B1's haversine \u2014 the raw column\ndidn't survive into the export (Cell 9.6 only carries ID_COLUMNS +\nprice columns, not feature columns)."
+      },
+      "CountyListingsResponse": {
+        "properties": {
+          "county": {
+            "type": "string",
+            "title": "County"
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/PaginationMeta"
+          },
+          "listings": {
+            "items": {
+              "$ref": "#/components/schemas/CountyListingScatterRow"
+            },
+            "type": "array",
+            "title": "Listings"
+          }
+        },
+        "type": "object",
+        "required": [
+          "county",
+          "pagination",
+          "listings"
+        ],
+        "title": "CountyListingsResponse",
+        "description": "GET /api/v1/counties/{county}/listings response \u2014 paginated per-listing data."
+      },
+      "CountyRowCount": {
+        "properties": {
+          "county": {
+            "type": "string",
+            "title": "County"
+          },
+          "n_listings": {
+            "type": "integer",
+            "title": "N Listings"
+          }
+        },
+        "type": "object",
+        "required": [
+          "county",
+          "n_listings"
+        ],
+        "title": "CountyRowCount",
+        "description": "One row of GET /api/v1/counties/row_counts \u2014 county name + listing count."
+      },
+      "CountyRowCountsResponse": {
+        "properties": {
+          "counties": {
+            "items": {
+              "$ref": "#/components/schemas/CountyRowCount"
+            },
+            "type": "array",
+            "title": "Counties"
+          },
+          "total_listings": {
+            "type": "integer",
+            "title": "Total Listings"
+          },
+          "n_counties": {
+            "type": "integer",
+            "title": "N Counties"
+          }
+        },
+        "type": "object",
+        "required": [
+          "counties",
+          "total_listings",
+          "n_counties"
+        ],
+        "title": "CountyRowCountsResponse",
+        "description": "GET /api/v1/counties/row_counts response."
+      },
+      "CountySummaryResponse": {
+        "properties": {
+          "counties": {
+            "items": {
+              "$ref": "#/components/schemas/CountySummaryRow"
+            },
+            "type": "array",
+            "title": "Counties"
+          },
+          "n_counties": {
+            "type": "integer",
+            "title": "N Counties"
+          },
+          "min_county_n": {
+            "type": "integer",
+            "title": "Min County N",
+            "description": "CONFIG.MIN_COUNTY_N from the manifest (small-n threshold)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "counties",
+          "n_counties",
+          "min_county_n"
+        ],
+        "title": "CountySummaryResponse",
+        "description": "Response for GET /api/v1/counties/summary."
+      },
+      "CountySummaryRow": {
+        "properties": {
+          "county": {
+            "type": "string",
+            "title": "County",
+            "description": "Kenya county name"
+          },
+          "n_listings": {
+            "type": "integer",
+            "title": "N Listings",
+            "description": "Listings in the modelling frame"
+          },
+          "median_price_per_acre_ksh": {
+            "type": "number",
+            "title": "Median Price Per Acre Ksh",
+            "description": "Median KSh per acre for the county"
+          },
+          "q1_price_per_acre_ksh": {
+            "type": "number",
+            "title": "Q1 Price Per Acre Ksh",
+            "description": "25th percentile KSh per acre"
+          },
+          "q3_price_per_acre_ksh": {
+            "type": "number",
+            "title": "Q3 Price Per Acre Ksh",
+            "description": "75th percentile KSh per acre"
+          },
+          "mean_log_price_per_acre": {
+            "type": "number",
+            "title": "Mean Log Price Per Acre",
+            "description": "Mean of the log target (log KSh per acre)"
+          },
+          "water_body_distance_share": {
+            "type": "number",
+            "title": "Water Body Distance Share",
+            "description": "Share of listings with a measured water-body distance"
+          },
+          "n_below_min_county_n": {
+            "type": "boolean",
+            "title": "N Below Min County N",
+            "description": "True when n_listings < CONFIG.MIN_COUNTY_N (Cell 9.5). The county's summary statistics rest on too few listings to trust."
+          }
+        },
+        "type": "object",
+        "required": [
+          "county",
+          "n_listings",
+          "median_price_per_acre_ksh",
+          "q1_price_per_acre_ksh",
+          "q3_price_per_acre_ksh",
+          "mean_log_price_per_acre",
+          "water_body_distance_share",
+          "n_below_min_county_n"
+        ],
+        "title": "CountySummaryRow",
+        "description": "One row of ``county_summary.csv`` \u2014 Cell 9.5 builds it as a\nper-county groupby over ``df_model``."
+      },
+      "CoverageThresholds": {
+        "properties": {
+          "min_county_n": {
+            "type": "integer",
+            "title": "Min County N",
+            "description": "Minimum listings per county"
+          },
+          "min_nearby_n": {
+            "type": "integer",
+            "title": "Min Nearby N",
+            "description": "Minimum nearby listings"
+          },
+          "radius_km": {
+            "type": "integer",
+            "title": "Radius Km",
+            "description": "Radius for nearby listings"
+          }
+        },
+        "type": "object",
+        "required": [
+          "min_county_n",
+          "min_nearby_n",
+          "radius_km"
+        ],
+        "title": "CoverageThresholds"
+      },
+      "CoverageWarningResponse": {
+        "properties": {
+          "is_low_support": {
+            "type": "boolean",
+            "title": "Is Low Support"
+          },
+          "county_listings": {
+            "type": "integer",
+            "title": "County Listings"
+          },
+          "nearby_listings": {
+            "type": "integer",
+            "title": "Nearby Listings"
+          },
+          "radius_km": {
+            "type": "integer",
+            "title": "Radius Km"
+          },
+          "min_county_n": {
+            "type": "integer",
+            "title": "Min County N"
+          },
+          "min_nearby_n": {
+            "type": "integer",
+            "title": "Min Nearby N"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "is_low_support",
+          "county_listings",
+          "nearby_listings",
+          "radius_km",
+          "min_county_n",
+          "min_nearby_n",
+          "reason"
+        ],
+        "title": "CoverageWarningResponse"
+      },
+      "DriverContributionResponse": {
+        "properties": {
+          "feature": {
+            "type": "string",
+            "title": "Feature"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label",
+            "description": "Human-readable label from feature_labels.json"
+          },
+          "shap_value": {
+            "type": "number",
+            "title": "Shap Value",
+            "description": "Combined SHAP value (log scale)"
+          },
+          "effect_pct": {
+            "type": "number",
+            "title": "Effect Pct",
+            "description": "(exp(shap_value) - 1) * 100 \u2014 multiplicative effect on typical price"
+          },
+          "direction": {
+            "type": "string",
+            "title": "Direction",
+            "description": "'price-increasing' / 'price-decreasing' / 'neutral'"
+          }
+        },
+        "type": "object",
+        "required": [
+          "feature",
+          "label",
+          "shap_value",
+          "effect_pct",
+          "direction"
+        ],
+        "title": "DriverContributionResponse",
+        "description": "One feature's contribution to the prediction.\n\nThe SHAP value is on the log scale (log KSh per acre).  The effect %\nfollows explain_spec.md's rule (Cell 9.10):\n\n    effect(f) = exp(s_f) - 1   (multiplicative change in typical price\n                                per acre attributable to feature f)"
+      },
+      "EnsembleShapCoverage": {
+        "properties": {
+          "tree_share_explained_by_shap": {
+            "type": "number",
+            "title": "Tree Share Explained By Shap",
+            "description": "Sum of tree-member (xgb + catboost) weights in the loaded ensemble"
+          },
+          "tabnet_share_not_covered": {
+            "type": "number",
+            "title": "Tabnet Share Not Covered",
+            "description": "TabNet's weight in the loaded ensemble (0 if pruned). The TabNet share of the blend is NOT covered by SHAP."
+          },
+          "explained_members": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Explained Members",
+            "description": "Which members the SHAP values cover (xgb, catboost)"
+          },
+          "unexplained_members": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Unexplained Members",
+            "description": "Which members are NOT covered (tabnet, if loaded)"
+          },
+          "combined_base_value": {
+            "type": "number",
+            "title": "Combined Base Value",
+            "description": "Combined base value on the log scale (weighted sum of member base values)"
+          },
+          "typical_price_per_acre_ksh": {
+            "type": "number",
+            "title": "Typical Price Per Acre Ksh",
+            "description": "exp(combined_base_value) \u2014 the typical KSh per acre before per-feature adjustments"
+          },
+          "latency_ms": {
+            "type": "number",
+            "title": "Latency Ms",
+            "description": "Wall-clock latency of this request's live SHAP computation. TreeExplainer is built once (cached for the process); shap_values on a single row is typically sub-millisecond to a few ms."
+          }
+        },
+        "type": "object",
+        "required": [
+          "tree_share_explained_by_shap",
+          "tabnet_share_not_covered",
+          "explained_members",
+          "unexplained_members",
+          "combined_base_value",
+          "typical_price_per_acre_ksh",
+          "latency_ms"
+        ],
+        "title": "EnsembleShapCoverage",
+        "description": "Recomputed from whichever members actually got loaded (post-pruning),\nNOT the notebook's static manifest values."
+      },
+      "ErrorBySupportResponse": {
+        "properties": {
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/ErrorBySupportRow"
+            },
+            "type": "array",
+            "title": "Rows"
+          },
+          "n_rows": {
+            "type": "integer",
+            "title": "N Rows"
+          }
+        },
+        "type": "object",
+        "required": [
+          "rows",
+          "n_rows"
+        ],
+        "title": "ErrorBySupportResponse",
+        "description": "GET /api/v1/model/error-by-support response."
+      },
+      "ErrorBySupportRow": {
+        "properties": {
+          "support_measure": {
+            "type": "string",
+            "title": "Support Measure",
+            "description": "'county_listings' or 'nearby_within_50km'"
+          },
+          "band": {
+            "type": "string",
+            "title": "Band",
+            "description": "Support band label (e.g. '<10 (below COVERAGE_MIN_COUNTY_N)', '10-19', '50+')"
+          },
+          "n_listings": {
+            "type": "integer",
+            "title": "N Listings",
+            "description": "Count of listings in that band"
+          },
+          "oof_rmse": {
+            "type": "number",
+            "title": "Oof Rmse",
+            "description": "OOF RMSE for that band (log scale)"
+          },
+          "oof_mae": {
+            "type": "number",
+            "title": "Oof Mae",
+            "description": "OOF MAE for that band (log scale)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "support_measure",
+          "band",
+          "n_listings",
+          "oof_rmse",
+          "oof_mae"
+        ],
+        "title": "ErrorBySupportRow",
+        "description": "One row from error_by_support.csv."
+      },
+      "ExplainabilityResponse": {
+        "properties": {
+          "production_run": {
+            "type": "string",
+            "title": "Production Run"
+          },
+          "shap_global": {
+            "items": {
+              "$ref": "#/components/schemas/ShapGlobalRow"
+            },
+            "type": "array",
+            "title": "Shap Global"
+          },
+          "feature_importance": {
+            "items": {
+              "$ref": "#/components/schemas/FeatureImportanceRow"
+            },
+            "type": "array",
+            "title": "Feature Importance"
+          },
+          "feature_labels": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/FeatureLabel"
+            },
+            "type": "object",
+            "title": "Feature Labels"
+          },
+          "ensemble_shap_coverage": {
+            "type": "object",
+            "title": "Ensemble Shap Coverage",
+            "description": "From the manifest \u2014 the weighted sum of member SHAP values explains the tree share; the TabNet share is NOT covered. Reports ``tree_share_explained_by_shap`` and ``tabnet_share_not_covered`` plus the notebook's note."
+          }
+        },
+        "type": "object",
+        "required": [
+          "production_run",
+          "shap_global",
+          "feature_importance",
+          "feature_labels",
+          "ensemble_shap_coverage"
+        ],
+        "title": "ExplainabilityResponse",
+        "description": "GET /api/v1/model/explainability \u2014 combines shap_global,\nfeature_importance and feature_labels in one payload so the tab can\nrender the global-importance chart and the plain-English feature\nlabels in a single round-trip."
+      },
+      "FeatureEvaluationResponse": {
+        "properties": {
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/FeatureEvaluationRow"
+            },
+            "type": "array",
+            "title": "Rows"
+          },
+          "n_features": {
+            "type": "integer",
+            "title": "N Features"
+          }
+        },
+        "type": "object",
+        "required": [
+          "rows",
+          "n_features"
+        ],
+        "title": "FeatureEvaluationResponse"
+      },
+      "FeatureEvaluationRow": {
+        "properties": {
+          "feature": {
+            "type": "string",
+            "title": "Feature"
+          },
+          "group": {
+            "type": "string",
+            "title": "Group",
+            "description": "Phase 3 FEATURE_GROUPS membership"
+          },
+          "available": {
+            "type": "string",
+            "title": "Available",
+            "description": "Phase 3 AVAILABILITY flag ('Yes' / 'No')"
+          },
+          "missing_%": {
+            "type": "number",
+            "title": "Missing %",
+            "description": "Share of dev-set rows with the feature missing (%)"
+          },
+          "mutual_info": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mutual Info",
+            "description": "Mutual information vs the target; NaN when not computed."
+          },
+          "perm_delta_rmse": {
+            "type": "number",
+            "title": "Perm Delta Rmse",
+            "description": "Permutation importance \u2014 RMSE increase when the feature is shuffled within the dev fold (Cell 3.6)."
+          },
+          "mean_abs_shap": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mean Abs Shap",
+            "description": "Mean |SHAP| on the dev set; NaN for non-tree-screened features."
+          },
+          "selection_votes": {
+            "type": "integer",
+            "title": "Selection Votes",
+            "description": "Votes across the Phase 3 selection methods"
+          },
+          "in_selected_set": {
+            "type": "boolean",
+            "title": "In Selected Set"
+          }
+        },
+        "type": "object",
+        "required": [
+          "feature",
+          "group",
+          "available",
+          "missing_%",
+          "perm_delta_rmse",
+          "selection_votes",
+          "in_selected_set"
+        ],
+        "title": "FeatureEvaluationRow",
+        "description": "One row of ``feature_evaluation.csv`` \u2014 Cell 3.8's ``ranked_table``,\nwritten out by Cell 9.3.  Every value is on the development set."
+      },
+      "FeatureImportanceRow": {
+        "properties": {
+          "model": {
+            "type": "string",
+            "title": "Model",
+            "description": "'xgb', 'catboost', or 'tabnet'"
+          },
+          "feature": {
+            "type": "string",
+            "title": "Feature"
+          },
+          "importance": {
+            "type": "number",
+            "title": "Importance"
+          },
+          "method": {
+            "type": "string",
+            "title": "Method",
+            "description": "xgb = gain; catboost = PredictionValuesChange (or 'mean_abs_shap (fallback; ...)' when the native importance is unavailable on a loaded model); tabnet = permutation on the development set (5 shuffles, seed from manifest.config.SEED)."
+          }
+        },
+        "type": "object",
+        "required": [
+          "model",
+          "feature",
+          "importance",
+          "method"
+        ],
+        "title": "FeatureImportanceRow",
+        "description": "One row of ``feature_importance.csv`` \u2014 Cell 9.4 builds one row per\n(model, feature) pair for all three models, with ``method`` recording\nhow the importance was computed."
+      },
+      "FeatureLabel": {
+        "properties": {
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "unit": {
+            "type": "string",
+            "title": "Unit"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "in_production_set": {
+            "type": "boolean",
+            "title": "In Production Set"
+          },
+          "available_at_prediction_time": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Available At Prediction Time"
+          }
+        },
+        "type": "object",
+        "required": [
+          "label",
+          "unit",
+          "description",
+          "source",
+          "in_production_set",
+          "available_at_prediction_time"
+        ],
+        "title": "FeatureLabel",
+        "description": "One entry of ``feature_labels.json:features`` \u2014 Cell 9.4."
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "HealthResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "``ok`` or ``degraded``"
+          },
+          "artifacts_loaded": {
+            "type": "boolean",
+            "title": "Artifacts Loaded",
+            "description": "True when all expected artifact files are present"
+          },
+          "version": {
+            "type": "string",
+            "title": "Version",
+            "description": "Application version"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "artifacts_loaded",
+          "version"
+        ],
+        "title": "HealthResponse"
+      },
+      "ListingsScoredResponse": {
+        "properties": {
+          "pagination": {
+            "$ref": "#/components/schemas/PaginationMeta"
+          },
+          "listings": {
+            "items": {
+              "$ref": "#/components/schemas/ListingsScoredRow"
+            },
+            "type": "array",
+            "title": "Listings"
+          }
+        },
+        "type": "object",
+        "required": [
+          "pagination",
+          "listings"
+        ],
+        "title": "ListingsScoredResponse",
+        "description": "GET /api/v1/listings/scored \u2014 paginated + filtered."
+      },
+      "ListingsScoredRow": {
+        "properties": {
+          "listing_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Listing Url",
+            "description": "Source URL (may be empty)"
+          },
+          "listing_no": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Listing No"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location"
+          },
+          "county": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "County"
+          },
+          "prop_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prop Type"
+          },
+          "latitude": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latitude"
+          },
+          "longitude": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Longitude"
+          },
+          "price_ksh": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Ksh",
+            "description": "Listed total price (KSh)"
+          },
+          "size_acres": {
+            "type": "number",
+            "title": "Size Acres"
+          },
+          "listed_price_per_acre_ksh": {
+            "type": "number",
+            "title": "Listed Price Per Acre Ksh"
+          },
+          "predicted_price_per_acre_ksh": {
+            "type": "number",
+            "title": "Predicted Price Per Acre Ksh"
+          },
+          "low_price_per_acre_ksh": {
+            "type": "number",
+            "title": "Low Price Per Acre Ksh"
+          },
+          "high_price_per_acre_ksh": {
+            "type": "number",
+            "title": "High Price Per Acre Ksh"
+          },
+          "listed_over_predicted": {
+            "type": "number",
+            "title": "Listed Over Predicted",
+            "description": "Listed / predicted ratio (>1 = listed above model)"
+          },
+          "scored_by": {
+            "type": "string",
+            "title": "Scored By",
+            "description": "'oof' (dev) or 'test'"
+          },
+          "verdict": {
+            "type": "string",
+            "title": "Verdict",
+            "description": "'underpriced' / 'fair' / 'overpriced'"
+          },
+          "data_quality_flag": {
+            "type": "boolean",
+            "title": "Data Quality Flag",
+            "description": "True when the listing's log price per acre falls outside the development target's 1st-99th percentile window (Cell 9.6)."
+          }
+        },
+        "type": "object",
+        "required": [
+          "listing_no",
+          "title",
+          "location",
+          "county",
+          "prop_type",
+          "latitude",
+          "longitude",
+          "size_acres",
+          "listed_price_per_acre_ksh",
+          "predicted_price_per_acre_ksh",
+          "low_price_per_acre_ksh",
+          "high_price_per_acre_ksh",
+          "listed_over_predicted",
+          "scored_by",
+          "verdict",
+          "data_quality_flag"
+        ],
+        "title": "ListingsScoredRow",
+        "description": "One row of ``listings_scored.parquet`` \u2014 Cell 9.6.\n\nThe identifier columns (Cell 9.2's ``ID_COLUMNS``) plus the size,\nthe listed / predicted / low / high per-acre prices, the\nlisted-over-predicted ratio, the scored-by tag (oof / test), the\nverdict (underpriced / overpriced / fair) and a data-quality flag."
+      },
+      "LiveExplanationResponse": {
+        "properties": {
+          "drivers": {
+            "items": {
+              "$ref": "#/components/schemas/DriverContributionResponse"
+            },
+            "type": "array",
+            "title": "Drivers",
+            "description": "Top N drivers sorted by |shap_value| descending"
+          },
+          "coverage": {
+            "$ref": "#/components/schemas/EnsembleShapCoverage"
+          }
+        },
+        "type": "object",
+        "required": [
+          "drivers",
+          "coverage"
+        ],
+        "title": "LiveExplanationResponse",
+        "description": "The driver breakdown + recomputed shares for one prediction."
+      },
+      "MetaResponse": {
+        "properties": {
+          "model_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Version",
+            "description": "Production run name from metadata.json"
+          },
+          "data_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Date",
+            "description": "Creation timestamp from metadata.json"
+          },
+          "coverage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CoverageThresholds"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Coverage rules from coverage_rules.json"
+          },
+          "ensemble_weights": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ensemble Weights",
+            "description": "Model weights from ensemble_weights.json"
+          }
+        },
+        "type": "object",
+        "title": "MetaResponse"
+      },
+      "MetricsJsonResponse": {
+        "properties": {
+          "production_run": {
+            "type": "string",
+            "title": "Production Run"
+          },
+          "created": {
+            "type": "string",
+            "title": "Created"
+          },
+          "runs": {
+            "type": "object",
+            "title": "Runs"
+          },
+          "interval_coverage_weighted_ensemble": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Interval Coverage Weighted Ensemble"
+          }
+        },
+        "type": "object",
+        "required": [
+          "production_run",
+          "created",
+          "runs",
+          "interval_coverage_weighted_ensemble"
+        ],
+        "title": "MetricsJsonResponse",
+        "description": "The ``metrics.json`` half of GET /api/v1/model/metrics \u2014 returned\nverbatim (the file's structure is nested and stable, so exposing it\nas a free-form dict keeps the endpoint faithful to the notebook)."
+      },
+      "MetricsResponse": {
+        "properties": {
+          "table": {
+            "$ref": "#/components/schemas/MetricsTableResponse"
+          },
+          "metrics_json": {
+            "$ref": "#/components/schemas/MetricsJsonResponse"
+          }
+        },
+        "type": "object",
+        "required": [
+          "table",
+          "metrics_json"
+        ],
+        "title": "MetricsResponse",
+        "description": "Full GET /api/v1/model/metrics response \u2014 table + JSON together."
+      },
+      "MetricsTableResponse": {
+        "properties": {
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/MetricsTableRow"
+            },
+            "type": "array",
+            "title": "Rows"
+          },
+          "n_runs": {
+            "type": "integer",
+            "title": "N Runs"
+          },
+          "n_models_per_run": {
+            "type": "integer",
+            "title": "N Models Per Run"
+          }
+        },
+        "type": "object",
+        "required": [
+          "rows",
+          "n_runs",
+          "n_models_per_run"
+        ],
+        "title": "MetricsTableResponse",
+        "description": "Response for the table half of GET /api/v1/model/metrics."
+      },
+      "MetricsTableRow": {
+        "properties": {
+          "run": {
+            "type": "string",
+            "title": "Run"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model"
+          },
+          "cv_rmse_mean": {
+            "type": "number",
+            "title": "Cv Rmse Mean"
+          },
+          "cv_rmse_se": {
+            "type": "number",
+            "title": "Cv Rmse Se"
+          },
+          "test_R2": {
+            "type": "number",
+            "title": "Test R2"
+          },
+          "test_RMSE": {
+            "type": "number",
+            "title": "Test Rmse"
+          },
+          "test_MAE": {
+            "type": "number",
+            "title": "Test Mae"
+          },
+          "test_MedAPE_pct": {
+            "type": "number",
+            "title": "Test Medape Pct"
+          },
+          "test_MAE_KSh_per_acre": {
+            "type": "number",
+            "title": "Test Mae Ksh Per Acre"
+          },
+          "ci95_R2_lo": {
+            "type": "number",
+            "title": "Ci95 R2 Lo"
+          },
+          "ci95_R2_hi": {
+            "type": "number",
+            "title": "Ci95 R2 Hi"
+          },
+          "ci95_RMSE_lo": {
+            "type": "number",
+            "title": "Ci95 Rmse Lo"
+          },
+          "ci95_RMSE_hi": {
+            "type": "number",
+            "title": "Ci95 Rmse Hi"
+          },
+          "ci95_MAE_lo": {
+            "type": "number",
+            "title": "Ci95 Mae Lo"
+          },
+          "ci95_MAE_hi": {
+            "type": "number",
+            "title": "Ci95 Mae Hi"
+          },
+          "county_group_cv_rmse": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "County Group Cv Rmse",
+            "description": "County-grouped CV RMSE; NaN for models without one."
+          },
+          "ensemble_weight": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ensemble Weight",
+            "description": "Member's ensemble weight; NaN when the model is not in MODEL_ORDER."
+          },
+          "trimmed_test_rmse": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trimmed Test Rmse"
+          },
+          "trimmed_test_rows": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trimmed Test Rows"
+          },
+          "interval_coverage_50": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Interval Coverage 50"
+          },
+          "interval_width_ratio_50": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Interval Width Ratio 50"
+          },
+          "interval_coverage_80": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Interval Coverage 80"
+          },
+          "interval_width_ratio_80": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Interval Width Ratio 80"
+          },
+          "interval_coverage_90": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Interval Coverage 90"
+          },
+          "interval_width_ratio_90": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Interval Width Ratio 90"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run",
+          "model",
+          "cv_rmse_mean",
+          "cv_rmse_se",
+          "test_R2",
+          "test_RMSE",
+          "test_MAE",
+          "test_MedAPE_pct",
+          "test_MAE_KSh_per_acre",
+          "ci95_R2_lo",
+          "ci95_R2_hi",
+          "ci95_RMSE_lo",
+          "ci95_RMSE_hi",
+          "ci95_MAE_lo",
+          "ci95_MAE_hi"
+        ],
+        "title": "MetricsTableRow",
+        "description": "One row of ``metrics_table.csv`` \u2014 Cell 9.3 writes one row per\n(run, model) pair.  The production run's ``weighted_ensemble`` row\nalso carries the trimmed-test result and interval_coverage_* fields,\nwhich are optional here because every other row leaves them blank."
+      },
+      "ModelPredictionsResponse": {
+        "properties": {
+          "oof": {
+            "items": {
+              "$ref": "#/components/schemas/PredictionRow"
+            },
+            "type": "array",
+            "title": "Oof",
+            "description": "Development-set out-of-fold predictions (each row predicted by models that never trained on it)"
+          },
+          "test": {
+            "items": {
+              "$ref": "#/components/schemas/PredictionRow"
+            },
+            "type": "array",
+            "title": "Test",
+            "description": "Test-set predictions (models fitted on development data only)"
+          },
+          "oof_count": {
+            "type": "integer",
+            "title": "Oof Count",
+            "description": "Total OOF rows in the file (may differ from len(oof) when sampling)"
+          },
+          "test_count": {
+            "type": "integer",
+            "title": "Test Count",
+            "description": "Total test rows in the file (may differ from len(test) when sampling)"
+          },
+          "sampled": {
+            "type": "boolean",
+            "title": "Sampled",
+            "description": "True when a sample parameter was used \u2014 the returned rows are a deterministic subset",
+            "default": false
+          },
+          "sample_size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sample Size",
+            "description": "The sample size requested (null when no sampling)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "oof",
+          "test",
+          "oof_count",
+          "test_count"
+        ],
+        "title": "ModelPredictionsResponse",
+        "description": "GET /api/v1/model/predictions response \u2014 both OOF + test sets together."
+      },
+      "NamedPOIResult": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "category": {
+            "type": "string",
+            "title": "Category",
+            "description": "hospital / school / market / bank / police / bus_stop / fuel / other"
+          },
+          "amenity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Amenity"
+          },
+          "shop": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shop"
+          },
+          "highway": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Highway"
+          },
+          "latitude": {
+            "type": "number",
+            "title": "Latitude"
+          },
+          "longitude": {
+            "type": "number",
+            "title": "Longitude"
+          },
+          "distance_km": {
+            "type": "number",
+            "title": "Distance Km"
+          },
+          "is_fallback": {
+            "type": "boolean",
+            "title": "Is Fallback",
+            "description": "True when the name is a generated fallback label ('<category> near <town>') rather than a real OSM name.",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "category",
+          "latitude",
+          "longitude",
+          "distance_km"
+        ],
+        "title": "NamedPOIResult",
+        "description": "One named POI from GET /api/v1/places/nearby."
+      },
+      "NearbyPOIsResponse": {
+        "properties": {
+          "lat": {
+            "type": "number",
+            "title": "Lat"
+          },
+          "lon": {
+            "type": "number",
+            "title": "Lon"
+          },
+          "radius_km": {
+            "type": "number",
+            "title": "Radius Km"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category",
+            "description": "Category filter (None = all categories)"
+          },
+          "pois": {
+            "items": {
+              "$ref": "#/components/schemas/NamedPOIResult"
+            },
+            "type": "array",
+            "title": "Pois"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "lat",
+          "lon",
+          "radius_km",
+          "pois",
+          "total"
+        ],
+        "title": "NearbyPOIsResponse",
+        "description": "GET /api/v1/places/nearby response."
+      },
+      "PaginationMeta": {
+        "properties": {
+          "page": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Page",
+            "description": "Current page (1-indexed)"
+          },
+          "page_size": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Page Size",
+            "description": "Rows returned per page"
+          },
+          "total_rows": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Total Rows",
+            "description": "Total rows matching the filter"
+          },
+          "total_pages": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Total Pages",
+            "description": "Total pages at this page_size"
+          },
+          "filters": {
+            "type": "object",
+            "title": "Filters",
+            "description": "The filters actually applied (echoed for the client)."
+          }
+        },
+        "type": "object",
+        "required": [
+          "page",
+          "page_size",
+          "total_rows",
+          "total_pages"
+        ],
+        "title": "PaginationMeta",
+        "description": "Standard pagination block returned by every list endpoint."
+      },
+      "PlaceSearchResponse": {
+        "properties": {
+          "query": {
+            "type": "string",
+            "title": "Query"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/PlaceSearchResult"
+            },
+            "type": "array",
+            "title": "Results"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "query",
+          "results",
+          "total"
+        ],
+        "title": "PlaceSearchResponse",
+        "description": "GET /api/v1/places/search response."
+      },
+      "PlaceSearchResult": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "place_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Place Type",
+            "description": "OSM place tag value (city, town, suburb, ...)"
+          },
+          "county": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "County",
+            "description": "County (filled by the backend via point-in-polygon; may be null)"
+          },
+          "subtitle": {
+            "type": "string",
+            "title": "Subtitle",
+            "description": "Region subtitle (e.g. 'Nairobi Metropolitan \u2014 town')"
+          },
+          "latitude": {
+            "type": "number",
+            "title": "Latitude"
+          },
+          "longitude": {
+            "type": "number",
+            "title": "Longitude"
+          },
+          "population": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Population",
+            "description": "OSM population tag (may be null)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "subtitle",
+          "latitude",
+          "longitude"
+        ],
+        "title": "PlaceSearchResult",
+        "description": "One row of GET /api/v1/places/search results."
+      },
+      "PredictNamedPOI": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "category": {
+            "type": "string",
+            "title": "Category"
+          },
+          "distance_km": {
+            "type": "number",
+            "title": "Distance Km"
+          },
+          "is_fallback": {
+            "type": "boolean",
+            "title": "Is Fallback",
+            "description": "True when the name is a generated fallback label ('<category> near <town>') rather than a real OSM name.",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "category",
+          "distance_km"
+        ],
+        "title": "PredictNamedPOI",
+        "description": "A named POI near the predicted point \u2014 for the 'Nearby & Infrastructure' list.\n\nSourced from kenya_pois_named.gpkg (Cell 5.2's ogr2ogr with `name` added\nto the -select list).  POIs without a name in OSM fall back to\n'<category> near <nearest town>' \u2014 these are labels, not real names.\nThe ``is_fallback`` flag is True for those fallback labels so the frontend\ncan style them distinctly (lighter text / \"approximate\" tag)."
+      },
+      "PredictRequest": {
+        "properties": {
+          "lat": {
+            "type": "number",
+            "maximum": 90.0,
+            "minimum": -90.0,
+            "title": "Lat",
+            "description": "Latitude (WGS84)"
+          },
+          "lon": {
+            "type": "number",
+            "maximum": 180.0,
+            "minimum": -180.0,
+            "title": "Lon",
+            "description": "Longitude (WGS84)"
+          },
+          "size_acres": {
+            "type": "number",
+            "exclusiveMinimum": 0.0,
+            "title": "Size Acres",
+            "description": "Parcel size in acres"
+          },
+          "prop_type": {
+            "type": "string",
+            "title": "Prop Type",
+            "description": "Property type (e.g. 'Land')",
+            "default": "Land"
+          },
+          "parcel_features": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "string",
+                  "enum": [
+                    "not_sure"
+                  ],
+                  "const": "not_sure"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": "object",
+            "title": "Parcel Features",
+            "description": "Infrastructure checklist. Keys are the ten item names (borehole, piped_water, river_water, water_tank, grid_electric, solar_electric, full_fence, partial_fence, structures, internal_road). Values are true / false / 'not_sure' (or null)."
+          },
+          "confidence_level": {
+            "type": "number",
+            "exclusiveMaximum": 1.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Confidence Level",
+            "description": "Confidence level for the multiplicative conformal interval. 0.50 / 0.80 / 0.90 are pre-calibrated; any value in (0, 1) is accepted (q recomputed from OOF residuals).",
+            "default": 0.8
+          }
+        },
+        "type": "object",
+        "required": [
+          "lat",
+          "lon",
+          "size_acres"
+        ],
+        "title": "PredictRequest",
+        "description": "POST /api/v1/predict request body.",
+        "example": {
+          "confidence_level": 0.8,
+          "lat": -1.2921,
+          "lon": 36.8219,
+          "parcel_features": {
+            "borehole": true,
+            "full_fence": true,
+            "grid_electric": true,
+            "internal_road": "not_sure",
+            "partial_fence": false,
+            "piped_water": false,
+            "river_water": "not_sure",
+            "solar_electric": false,
+            "structures": false,
+            "water_tank": false
+          },
+          "prop_type": "Land",
+          "size_acres": 1.5
+        }
+      },
+      "PredictResponse": {
+        "properties": {
+          "price_per_acre_ksh": {
+            "type": "number",
+            "title": "Price Per Acre Ksh"
+          },
+          "price_per_acre_low_ksh": {
+            "type": "number",
+            "title": "Price Per Acre Low Ksh"
+          },
+          "price_per_acre_high_ksh": {
+            "type": "number",
+            "title": "Price Per Acre High Ksh"
+          },
+          "total_price_ksh": {
+            "type": "number",
+            "title": "Total Price Ksh"
+          },
+          "total_price_low_ksh": {
+            "type": "number",
+            "title": "Total Price Low Ksh"
+          },
+          "total_price_high_ksh": {
+            "type": "number",
+            "title": "Total Price High Ksh"
+          },
+          "confidence_level": {
+            "type": "number",
+            "title": "Confidence Level"
+          },
+          "county": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "County"
+          },
+          "coverage": {
+            "$ref": "#/components/schemas/CoverageWarningResponse"
+          },
+          "ensemble_members": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Ensemble Members",
+            "description": "Which members were actually loaded (post-pruning) and their renormalised weights."
+          },
+          "diagnostics": {
+            "type": "object",
+            "title": "Diagnostics",
+            "description": "B1's diagnostics: nearest places, infra source, spatial-index load state."
+          },
+          "explanation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LiveExplanationResponse"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Live driver breakdown (Cell 9.4 SHAP + Cell 9.10 money-effect rule). Null when no tree models are loaded or the explanation service is unavailable."
+          },
+          "comparables": {
+            "items": {
+              "$ref": "#/components/schemas/ComparableListingResponse"
+            },
+            "type": "array",
+            "title": "Comparables",
+            "description": "Nearby listings from listings_scored.parquet within 50 km, ranked by distance.  Empty when listings_scored.parquet is not loaded."
+          },
+          "named_pois": {
+            "items": {
+              "$ref": "#/components/schemas/PredictNamedPOI"
+            },
+            "type": "array",
+            "title": "Named Pois",
+            "description": "Named POIs within 5 km of the predicted point (hospital, school, market, etc.) from kenya_pois_named.gpkg.  Empty when the named-POI layer is not loaded."
+          }
+        },
+        "type": "object",
+        "required": [
+          "price_per_acre_ksh",
+          "price_per_acre_low_ksh",
+          "price_per_acre_high_ksh",
+          "total_price_ksh",
+          "total_price_low_ksh",
+          "total_price_high_ksh",
+          "confidence_level",
+          "county",
+          "coverage"
+        ],
+        "title": "PredictResponse",
+        "description": "POST /api/v1/predict response \u2014 Cell 8.3 + Cell 9.1 + total + warning\n+ live driver breakdown + comparables + named POIs.",
+        "example": {
+          "comparables": [
+            {
+              "county": "Nairobi",
+              "distance_km": 1.23,
+              "listed_price_per_acre_ksh": 4500000,
+              "listing_no": "L001",
+              "location": "Karen, Nairobi",
+              "predicted_price_per_acre_ksh": 5000000,
+              "size_acres": 1.0,
+              "title": "1 acre in Karen",
+              "verdict": "underpriced"
+            }
+          ],
+          "confidence_level": 0.8,
+          "county": "Nairobi",
+          "coverage": {
+            "county_listings": 412,
+            "is_low_support": false,
+            "min_county_n": 10,
+            "min_nearby_n": 5,
+            "nearby_listings": 87,
+            "radius_km": 50,
+            "reason": ""
+          },
+          "diagnostics": {},
+          "ensemble_members": {
+            "catboost": 0.55,
+            "xgb": 0.45
+          },
+          "explanation": {
+            "coverage": {
+              "combined_base_value": 15.32,
+              "explained_members": [
+                "xgb",
+                "catboost"
+              ],
+              "latency_ms": 7.3,
+              "tabnet_share_not_covered": 0.0,
+              "tree_share_explained_by_shap": 1.0,
+              "typical_price_per_acre_ksh": 4500000,
+              "unexplained_members": []
+            },
+            "drivers": [
+              {
+                "direction": "price-increasing",
+                "effect_pct": 23.4,
+                "feature": "log_size_acres",
+                "label": "Log parcel size",
+                "shap_value": 0.21
+              }
+            ]
+          },
+          "named_pois": [
+            {
+              "category": "school",
+              "distance_km": 0.8,
+              "name": "St. Joseph Academy"
+            },
+            {
+              "category": "hospital",
+              "distance_km": 2.1,
+              "name": "Ruiru Level 4 Hospital"
+            }
+          ],
+          "price_per_acre_high_ksh": 7200000,
+          "price_per_acre_ksh": 4500000,
+          "price_per_acre_low_ksh": 2800000,
+          "total_price_high_ksh": 10800000,
+          "total_price_ksh": 6750000,
+          "total_price_low_ksh": 4200000
+        }
+      },
+      "PredictionRow": {
+        "properties": {
+          "listing_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Listing Url"
+          },
+          "listing_no": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Listing No"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location"
+          },
+          "county": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "County"
+          },
+          "prop_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prop Type"
+          },
+          "latitude": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latitude"
+          },
+          "longitude": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Longitude"
+          },
+          "price_ksh": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Ksh",
+            "description": "Listed total price (KSh)"
+          },
+          "y_true": {
+            "type": "number",
+            "title": "Y True",
+            "description": "Log price per acre (the target)"
+          },
+          "pred_xgb": {
+            "type": "number",
+            "title": "Pred Xgb",
+            "description": "XGBoost log-scale prediction"
+          },
+          "pred_catboost": {
+            "type": "number",
+            "title": "Pred Catboost",
+            "description": "CatBoost log-scale prediction"
+          },
+          "pred_tabnet": {
+            "type": "number",
+            "title": "Pred Tabnet",
+            "description": "TabNet log-scale prediction"
+          },
+          "pred_simple_average": {
+            "type": "number",
+            "title": "Pred Simple Average",
+            "description": "Simple average of member predictions (log scale)"
+          },
+          "pred_weighted_ensemble": {
+            "type": "number",
+            "title": "Pred Weighted Ensemble",
+            "description": "Weighted ensemble prediction (log scale)"
+          },
+          "fold": {
+            "type": "integer",
+            "title": "Fold",
+            "description": "Held-out fold of first CV repeat (-1 for test rows)"
+          },
+          "split": {
+            "type": "string",
+            "title": "Split",
+            "description": "'dev' (out-of-fold) or 'test'"
+          }
+        },
+        "type": "object",
+        "required": [
+          "y_true",
+          "pred_xgb",
+          "pred_catboost",
+          "pred_tabnet",
+          "pred_simple_average",
+          "pred_weighted_ensemble",
+          "fold",
+          "split"
+        ],
+        "title": "PredictionRow",
+        "description": "One row from oof_predictions or test_predictions parquet."
+      },
+      "PriceBin": {
+        "properties": {
+          "lower_ksh": {
+            "type": "number",
+            "title": "Lower Ksh",
+            "description": "Bin lower edge (KSh per acre)"
+          },
+          "upper_ksh": {
+            "type": "number",
+            "title": "Upper Ksh",
+            "description": "Bin upper edge (KSh per acre)"
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Count",
+            "description": "Usable listings in this bin"
+          }
+        },
+        "type": "object",
+        "required": [
+          "lower_ksh",
+          "upper_ksh",
+          "count"
+        ],
+        "title": "PriceBin",
+        "description": "One histogram bin on the log10 price axis.\n\n``lower_ksh`` / ``upper_ksh`` are the bin edges in KSh per acre\n(inclusive-exclusive, except the final bin which includes its upper\nedge).  ``count`` is the number of usable listings in the bin."
+      },
+      "PriceDistributionResponse": {
+        "properties": {
+          "n_bins": {
+            "type": "integer",
+            "title": "N Bins",
+            "description": "Number of histogram bins returned"
+          },
+          "bins": {
+            "items": {
+              "$ref": "#/components/schemas/PriceBin"
+            },
+            "type": "array",
+            "title": "Bins",
+            "description": "Log-spaced histogram bins"
+          },
+          "percentiles": {
+            "$ref": "#/components/schemas/PricePercentiles"
+          },
+          "n_usable": {
+            "type": "integer",
+            "title": "N Usable",
+            "description": "Usable listings (rows in listings_scored with a finite per-acre price)"
+          },
+          "n_flagged": {
+            "type": "integer",
+            "title": "N Flagged",
+            "description": "Listings flagged by data_quality_flag (excluded from training)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "n_bins",
+          "bins",
+          "percentiles",
+          "n_usable",
+          "n_flagged"
+        ],
+        "title": "PriceDistributionResponse",
+        "description": "GET /api/v1/data/price-distribution response.\n\n``n_usable`` powers the Modeling Yield tile; ``n_flagged`` (rows whose\n``data_quality_flag`` is true) powers the Sanitization tile.  The raw\npre-cleaning \"observed corpus\" count is NOT here \u2014 that number does not\nexist anywhere the backend loads; the frontend marks that tile\nunavailable."
+      },
+      "PricePercentiles": {
+        "properties": {
+          "p1": {
+            "type": "number",
+            "title": "P1",
+            "description": "1st percentile (KSh per acre)"
+          },
+          "p10": {
+            "type": "number",
+            "title": "P10",
+            "description": "10th percentile (KSh per acre)"
+          },
+          "p50": {
+            "type": "number",
+            "title": "P50",
+            "description": "Median (KSh per acre)"
+          },
+          "p90": {
+            "type": "number",
+            "title": "P90",
+            "description": "90th percentile (KSh per acre)"
+          },
+          "p99": {
+            "type": "number",
+            "title": "P99",
+            "description": "99th percentile (KSh per acre)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "p1",
+          "p10",
+          "p50",
+          "p90",
+          "p99"
+        ],
+        "title": "PricePercentiles",
+        "description": "Percentile set of the usable per-acre asking prices (KSh).\n\nWeb shows p1 / p50 / p99; mobile m12 shows p10 / p50 / p90 \u2014 both come\nfrom this single block so the two breakpoints never disagree."
+      },
+      "ShapGlobalRow": {
+        "properties": {
+          "model": {
+            "type": "string",
+            "title": "Model",
+            "description": "'xgb' or 'catboost'"
+          },
+          "feature": {
+            "type": "string",
+            "title": "Feature"
+          },
+          "mean_abs_shap": {
+            "type": "number",
+            "title": "Mean Abs Shap"
+          }
+        },
+        "type": "object",
+        "required": [
+          "model",
+          "feature",
+          "mean_abs_shap"
+        ],
+        "title": "ShapGlobalRow",
+        "description": "One row of ``shap_global.csv`` \u2014 Cell 9.4 builds one row per\n(model, feature) pair for the two tree models (xgb, catboost)."
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    }
+  }
+}
