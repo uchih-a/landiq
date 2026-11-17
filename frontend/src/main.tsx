@@ -1,22 +1,23 @@
-import { StrictMode } from 'react';
-import { createRoot } from 'react-dom/client';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import App from './App';
-import './styles/globals.css';
+import React from 'react';
+import ReactDOM from 'react-dom/client';
+import { BrowserRouter } from 'react-router-dom';
+import 'maplibre-gl/dist/maplibre-gl.css';
+import './index.css'; // Tailwind base/components/utilities + design tokens
+import './lib/i18n'; // initialize i18next before app renders
+import App from './app/App';
+import { QueryProvider } from './app/QueryProvider';
 
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      retry: 1,
-      refetchOnWindowFocus: false,
-    },
-  },
-});
+const rootEl = document.getElementById('root');
+if (!rootEl) {
+  throw new Error('Root element #root was not found in the DOM');
+}
 
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <App />
-    </QueryClientProvider>
-  </StrictMode>
+ReactDOM.createRoot(rootEl).render(
+  <React.StrictMode>
+    <BrowserRouter>
+      <QueryProvider>
+        <App />
+      </QueryProvider>
+    </BrowserRouter>
+  </React.StrictMode>,
 );

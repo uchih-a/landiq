@@ -1,0 +1,72 @@
+[project]
+name = "kenya-land-valuation"
+version = "0.1.0"
+description = "FastAPI backend for Kenya land valuation — ensemble price prediction, market insights, and model explainability."
+requires-python = ">=3.12,<3.13"
+
+# Pinned to match Notebook 3 model-training versions (library_versions in
+# metadata.json).  Update these pins after each production training run so
+# saved XGBoost / CatBoost models load identically.
+dependencies = [
+    "numpy==1.26.4",
+    "pandas==2.2.2",
+    "scipy==1.13.1",
+    "scikit-learn==1.5.1",
+    "xgboost==2.1.1",
+    "catboost==1.2.5",
+    "pyarrow==15.0.2",
+    "fastapi==0.115.0",
+    "uvicorn[standard]==0.30.6",
+    "pydantic==2.9.2",
+    "pydantic-settings==2.5.2",
+    "structlog==24.4.0",
+    "python-multipart==0.0.12",
+    "slowapi==0.1.9",
+    "prometheus-client==0.21.1",
+    "torch==2.14.1+cpu",
+    "pytorch-tabnet==4.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff==0.6.9",
+    "mypy==1.11.2",
+    "pytest==8.3.3",
+    "pytest-asyncio==0.24.0",
+    "httpx==0.27.2",
+    "pre-commit==3.8.0",
+    # Test-only: geopandas + shapely for writing tiny GPKG fixtures in
+    # test_places.py / test_amenity_proximity.py; shap for the live-SHAP
+    # tests in test_predict.py.  These were previously installed ad-hoc via
+    # `pip install` during development but were missing from
+    # requirements-dev.txt — a pre-existing gap surfaced by the uv migration
+    # (uv creates a clean venv, so previously-cached installs don't carry
+    # over).  shap==0.45.1 is the last version compatible with numpy<2.0.
+    "geopandas==1.1.2",
+    "shapely>=2.0,<3.0",
+    "shap==0.45.1",
+    "fiona>=1.10.1",
+]
+
+[[tool.uv.index]]
+url = "https://download.pytorch.org/whl/cpu"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app", "landval"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+check_untyped_defs = false
+warn_return_any = false

@@ -1,0 +1,33 @@
+# Podman Compose — local development with read-only artifacts volume.
+#
+# Usage:
+#   podman compose up --build
+#
+# The artifacts directory is mounted read-only at /app/artifacts.
+# For rootless Podman + SELinux, add :z or :Z to the volume label:
+#   - ./artifacts:/app/artifacts:ro,z
+# (Use :z for shared, :Z for private — see the deploy docs.)
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "${PORT:-8000}:8000"
+    environment:
+      - APP_ENV=production
+      - LOG_LEVEL=INFO
+      - PORT=8000
+      - ARTIFACTS_DIR=/app/artifacts
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:3000}
+      - ALLOWED_ORIGINS_REGEX=${ALLOWED_ORIGINS_REGEX:-}
+    volumes:
+      - ./artifacts:/app/artifacts:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
