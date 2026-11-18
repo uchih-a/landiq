@@ -1,29 +1,19 @@
 /**
- * Model Performance — the F7 screen.
+ * Model Performance — the F7 screen (P5b real-data round).
  *
- * P5 fidelity pass: wired in the live /model/predictions and
- * /model/error-by-support endpoints (known-gaps #49 RESOLVED). The
- * actual-vs-predicted scatter and error-by-support bars now render
- * real data instead of placeholder text.
- *
- * Layout:
- *   ┌──────────────────────────────────────────────────────────────────┐
- *   │ Model Performance                                                 │
- *   ├──────────────────────────────────────────────────────────────────┤
- *   │  KPI row (4 stats from weighted_ensemble row)                     │
- *   ├──────────────────────────────────────────────────────────────────┤
- *   │  Model comparison bars + CI whiskers                              │
- *   ├──────────────────────────────────────┬───────────────────────────┤
- *   │  Ensemble weights (5 cols)            │  Do ranges hold? (7 cols) │
- *   ├──────────────────────────────────────┴───────────────────────────┤
- *   │  Actual vs Predicted scatter (NEW — P5 wiring)                   │
- *   ├──────────────────────────────────────────────────────────────────┤
- *   │  Error by listings nearby (NEW — P5 wiring)                       │
- *   └──────────────────────────────────────────────────────────────────┘
+ * Every fix of the round is applied across the child components (see
+ * their headers).  This index adds:
+ *  - a plain-language summary line under the KPI row, built entirely
+ *    from the response (n_test, MedAPE, default-level coverage) via
+ *    i18n interpolation — any clause whose data is null is hidden;
+ *  - the "Weighted ensemble average absolute error" line as an i18n
+ *    string with the shared money formatter (hidden when null);
+ *  - the subtitle via i18n (was an English-only literal).
  */
 import { useTranslation } from 'react-i18next';
 
 import { EmptyState } from '@/components';
+import { useFormatNumber } from '@/lib/i18n/useLocale';
 import { useErrorBySupport, useModelMetrics, useModelPredictions } from '@/lib/api/hooks';
 import type { MetricsResponse } from '@/lib/api/types';
 import { formatMoney } from '@/lib/currency/format';
@@ -38,12 +28,39 @@ import { pickEnsembleRow } from './metrics-helpers';
 
 export default function ModelPerformance() {
   const { t } = useTranslation();
+  // P7b-F: the active locale's grouping (en-KE / sw-KE), never a typed one.
+  const formatNumber = useFormatNumber();
   const metricsQ = useModelMetrics();
   const predictionsQ = useModelPredictions(500);
   const errorBySupportQ = useErrorBySupport();
   const metrics: MetricsResponse | undefined = metricsQ.data;
   const ensembleRow = pickEnsembleRow(metrics);
-  const maeKsh = ensembleRow?.test_MAE_KSh_per_acre;
+  const maeKsh = ensembleRow?.test_MAE_KSh_per_acre ?? null;
+
+  // ---- Plain-language summary (all numbers from the response; any
+  //      clause whose data is null is hidden). ----
+  const summaryParts: string[] = [];
+  const nTest = metrics?.n_test ?? null;
+  const medAPE = ensembleRow?.test_MedAPE_pct ?? null;
+  const defaultLevel = metrics?.default_interval_level ?? null;
+  if (ensembleRow != null && defaultLevel != null) {
+    const pct = Math.round(defaultLevel * 100);
+    const field = (ensembleRow as unknown as Record<string, unknown>)[
+      `interval_coverage_${pct}`
+    ];
+    const coverage =
+      typeof field === 'number' && Number.isFinite(field) ? field : null;
+    if (nTest != null && medAPE != null && coverage != null) {
+      summaryParts.push(
+        t('model.summaryLine', {
+          n: formatNumber(nTest),
+          pct: medAPE.toFixed(1),
+          range: pct,
+          coverage: (coverage * 100).toFixed(0),
+        }),
+      );
+    }
+  }
 
   return (
     <div className="flex flex-col gap-space-xl p-margin max-w-[1400px] mx-auto">
@@ -53,8 +70,14 @@ export default function ModelPerformance() {
             {t('model.title')}
           </h1>
           <p className="mt-2 text-body-regular text-on-surface-variant">
-            Cross-validated accuracy, calibration, and the contribution of each ensemble member.
+            {t('model.subtitle')}
           </p>
+          {/* P5b: the production run + date from the response. */}
+          {metrics?.production_run_label && (
+            <p className="mt-1 text-caption-sm text-secondary">
+              {metrics.production_run_label}
+            </p>
+          )}
         </div>
       </header>
 
@@ -62,7 +85,7 @@ export default function ModelPerformance() {
         <EmptyState
           icon="cloud_off"
           title={t('common.dataUnavailable')}
-          message="The model metrics feed is unavailable."
+          message={t('model.metricsLoadFailed')}
           actionLabel={t('common.retry')}
           onAction={() => metricsQ.refetch()}
         />
@@ -70,9 +93,18 @@ export default function ModelPerformance() {
         <>
           <MetricsKpiRow metrics={metrics} isLoading={metricsQ.isLoading} />
 
-          {maeKsh != null && (
+          {/* Plain-language summary line (from the response). */}
+          {summaryParts.length > 0 && (
+            <p className="text-caption-sm text-secondary -mt-space-xl" role="status">
+              {summaryParts.join(' ')}
+            </p>
+          )}
+
+          {maeKsh != null && ensembleRow != null && (
             <p className="text-caption-sm text-secondary -mt-space-xl">
-              Weighted ensemble average absolute error: {formatMoney(maeKsh)} per acre.
+              {t('model.maeLine', {
+                value: formatMoney(maeKsh),
+              })}
             </p>
           )}
 
@@ -102,10 +134,11 @@ export default function ModelPerformance() {
             </div>
           </section>
 
-          {/* P5: Actual vs Predicted scatter (replaces placeholder) */}
+          {/* Actual vs Predicted scatter (wired in P5). */}
           <ActualVsPredicted query={predictionsQ} />
 
-          {/* P5: Error by listings nearby (replaces placeholder text) */}
+          {/* Error by listings nearby (wired in P5; band_order + data
+              bands in P5b). */}
           <ErrorBySupportBars query={errorBySupportQ} />
         </>
       )}

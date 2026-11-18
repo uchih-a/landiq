@@ -17,3 +17,6 @@ export type { Status } from './StatusBadge';
 export { EmptyState } from './EmptyState';
 export { ErrorBoundary } from './ErrorBoundary';
 export { LoadingSkeleton, LoadingSkeletonCard } from './LoadingSkeleton';
+// P6b: moved from features/predictor — shared with the Explainability
+// "One estimate" mode.
+export { DriversList } from './DriversList';

@@ -5,36 +5,39 @@
  *   ┌──────────────────────────────────────────────────────────────────┐
  *   │ Explainability          [All listings | One estimate]             │
  *   ├──────────────────────────────────────┬───────────────────────────┤
- *   │  What matters most overall (7 cols)   │  How much is explained (5)│
+ *   │  What matters most overall (7 cols)  │  How much is explained (5)│
  *   ├──────────────────────────────────────┴───────────────────────────┤
- *   │  Plain synthesis (templated client-side from the driver list)     │
+ *   │  In plain words (synthesis, i18n with interpolation)             │
  *   ├──────────────────────────────────────────────────────────────────┤
- *   │  Glossary (full width)                                             │
+ *   │  Glossary (full width)                                           │
  *   └──────────────────────────────────────────────────────────────────┘
  *
- * Mode toggle:
- *  - "All listings"     -> global view (default)
- *  - "One estimate"     -> placeholder. Real per-listing SHAP would
- *                          come from /predict (already rendered on the
- *                          Predictor screen) or from a future per-listing
- *                          endpoint. For now we just prompt the user.
+ * Mode toggle (a proper radiogroup with arrow-key support):
+ *  - "All listings"  -> global view (default).  The bars/donut/glossary
+ *                      all render backend-served data; the selected
+ *                      model comes from the response's `models` list +
+ *                      `default_model` (never a hard-coded member key).
+ *  - "One estimate"  -> the last successful /predict estimate from the
+ *                      shared last-estimate store (see OneEstimatePanel;
+ *                      the old Deal-Finder promise was removed — that
+ *                      behaviour does not exist).
  *
- * Data:
- *  - `useExplainability()` -> shap_global + feature_labels +
- *                             ensemble_shap_coverage
+ * Data: `useExplainability()` -> shap_global + feature_labels +
+ * ensemble_shap_coverage (fractions + source) + models + default_model +
+ * typical_price_per_acre_ksh.
  */
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { EmptyState, ValuationCard } from '@/components';
 import { useExplainability } from '@/lib/api/hooks';
-import type { FeatureLabel, ShapGlobalRow } from '@/lib/api/types';
 import { formatMoney } from '@/lib/currency/format';
+import { selectTopDrivers, synthesisKey, formatDriverNames } from './helpers';
 
 import { CoverageDonut } from './CoverageDonut';
 import { GlossaryPanel } from './GlossaryPanel';
 import { GlobalShapBars } from './GlobalShapBars';
-import { buildSynthesis, type DriverSummary } from './helpers';
+import { OneEstimatePanel } from './OneEstimatePanel';
 
 type Mode = 'global' | 'estimate';
 
@@ -43,34 +46,58 @@ export default function Explainability() {
   const explainQ = useExplainability();
   const [mode, setMode] = useState<Mode>('global');
 
-  const shapRows: ShapGlobalRow[] | undefined = explainQ.data?.shap_global;
-  const labels: Record<string, FeatureLabel> | undefined =
-    explainQ.data?.feature_labels;
-  const coverage: Record<string, unknown> | undefined =
-    explainQ.data?.ensemble_shap_coverage;
+  const data = explainQ.data;
+  const shapRows = data?.shap_global;
+  const labels = data?.feature_labels;
+  const coverage = data?.ensemble_shap_coverage;
+  const models = data?.models;
+  const defaultModel = data?.default_model ?? null;
+  const typicalPrice = data?.typical_price_per_acre_ksh ?? null;
 
-  // Top 5 drivers power the plain-synthesis sentence.
-  const topDrivers = useMemo<DriverSummary[]>(() => {
-    if (!shapRows) return [];
-    return [...shapRows]
-      .filter((r) => r.model === 'xgb')
-      .sort((a, b) => b.mean_abs_shap - a.mean_abs_shap)
-      .slice(0, 5)
-      .map((r) => ({
-        feature: r.feature,
-        label: labels?.[r.feature]?.label ?? r.feature,
-        mean_abs_shap: r.mean_abs_shap,
-      }));
-  }, [shapRows, labels]);
+  // ---- Model selection (P6b problem D): from the response only. ----
+  // The user's pick (state) wins; else the backend's default_model; else
+  // the first SHAP-covered member in list order.  Null when no member has
+  // SHAP rows — the bars card then shows its honest empty state.
+  const [userModel, setUserModel] = useState<string | null>(null);
+  const shapModelKeys = useMemo(
+    () => (models ?? []).filter((m) => m.has_shap).map((m) => m.key),
+    [models],
+  );
+  const selectedModel = useMemo<string | null>(() => {
+    if (userModel) return userModel;
+    if (defaultModel) return defaultModel;
+    return shapModelKeys[0] ?? null;
+  }, [userModel, defaultModel, shapModelKeys]);
 
-  const synthesis = useMemo(() => buildSynthesis(topDrivers), [topDrivers]);
+  // ---- Top drivers power the plain-synthesis sentence (i18n). ----
+  const topDrivers = useMemo(
+    () => selectTopDrivers(shapRows, labels, selectedModel),
+    [shapRows, labels, selectedModel],
+  );
 
-  // Defensively read the typical-price reference from the coverage block
-  // so the footer can quote it without assuming the field's presence.
-  const typicalPrice =
-    coverage && typeof coverage.typical_price_per_acre_ksh === 'number'
-      ? (coverage.typical_price_per_acre_ksh as number)
-      : null;
+  const synthesis = useMemo(() => {
+    if (topDrivers.length === 0) return null;
+    const names = topDrivers.map((d) => d.label);
+    const andWord = t('common.and');
+    if (names.length === 1) {
+      return t('explain.synthesis.one', { a: names[0] });
+    }
+    if (names.length === 2) {
+      return t('explain.synthesis.two', { a: names[0], b: names[1] });
+    }
+    return t(`explain.synthesis.${synthesisKey(names.length)}`, {
+      list: formatDriverNames(names, andWord),
+    });
+  }, [topDrivers, t]);
+
+  // ---- Glossary: only features the model uses (from shap_global). ----
+  const modelFeatureKeys = useMemo(
+    () => (shapRows ? new Set(shapRows.map((r) => r.feature)) : undefined),
+    [shapRows],
+  );
+
+  const isLoading = explainQ.isLoading;
+  const isError = explainQ.isError;
 
   return (
     <div className="flex flex-col gap-space-xl p-margin max-w-[1400px] mx-auto">
@@ -81,7 +108,7 @@ export default function Explainability() {
               {t('explain.title')}
             </h1>
             <p className="mt-2 text-body-regular text-on-surface-variant">
-              What the ensemble weighs most, and how much of its price attribution SHAP actually covers.
+              {t('explain.subtitle')}
             </p>
           </div>
         </div>
@@ -89,16 +116,12 @@ export default function Explainability() {
       </header>
 
       {mode === 'estimate' ? (
-        <EmptyState
-          icon="neurology"
-          title={t('explain.oneEstimate')}
-          message="Select a listing from Deal Finder or run the Predictor — its per-listing SHAP drivers will appear here."
-        />
-      ) : explainQ.isError ? (
+        <OneEstimatePanel models={models} />
+      ) : isError ? (
         <EmptyState
           icon="cloud_off"
           title={t('common.dataUnavailable')}
-          message="The explainability feed is unavailable."
+          message={t('explain.feedUnavailable')}
           actionLabel={t('common.retry')}
           onAction={() => explainQ.refetch()}
         />
@@ -109,16 +132,21 @@ export default function Explainability() {
               <GlobalShapBars
                 rows={shapRows}
                 labels={labels}
-                isLoading={explainQ.isLoading}
-                isError={explainQ.isError}
+                models={models}
+                defaultModel={defaultModel}
+                selectedModel={selectedModel}
+                onSelectModel={setUserModel}
+                isLoading={isLoading}
+                isError={isError}
                 onRetry={() => explainQ.refetch()}
               />
             </div>
             <div className="lg:col-span-5">
               <CoverageDonut
                 coverage={coverage}
-                isLoading={explainQ.isLoading}
-                isError={explainQ.isError}
+                models={models}
+                isLoading={isLoading}
+                isError={isError}
                 onRetry={() => explainQ.refetch()}
               />
             </div>
@@ -127,27 +155,31 @@ export default function Explainability() {
           {synthesis && (
             <ValuationCard>
               <h2 className="font-headline-section text-headline-section text-on-surface mb-2">
-                Plain synthesis
+                {t('explain.synthesisTitle')}
               </h2>
-              {/* The backend does not generate natural-language synthesis.
-                  This text is templated client-side from the driver list. */}
-              <p className="text-body-regular text-on-surface-variant">
-                {synthesis}
+              {/* The backend does not generate natural-language synthesis;
+                  this text is templated client-side from the driver list,
+                  with the wording in i18n (en + sw). */}
+              <p className="text-body-regular text-on-surface-variant">{synthesis}</p>
+              <p className="mt-2 text-caption-sm text-secondary">
+                {t('explain.synthesis.unit')}
               </p>
             </ValuationCard>
           )}
 
           <GlossaryPanel
             labels={labels}
-            isLoading={explainQ.isLoading}
-            isError={explainQ.isError}
+            modelFeatureKeys={modelFeatureKeys}
+            isLoading={isLoading}
+            isError={isError}
             onRetry={() => explainQ.refetch()}
           />
 
+          {/* The model's baseline price — hidden when the backend did not
+              serve it (never invented client-side). */}
           {typicalPrice != null && (
             <p className="text-caption-sm text-secondary">
-              Ensemble SHAP coverage reflects the loaded model — typical per-acre price reference:{' '}
-              {formatMoney(typicalPrice)}.
+              {t('explain.typicalPriceFooter', { value: formatMoney(typicalPrice) })}
             </p>
           )}
         </>
@@ -161,26 +193,53 @@ interface ModeToggleProps {
   onChange: (m: Mode) => void;
 }
 
+const MODE_ORDER: Mode[] = ['global', 'estimate'];
+
+/**
+ * Segmented control — role="radiogroup" with radio buttons; ArrowLeft /
+ * ArrowRight move between the two modes (P6b problem K a11y).
+ */
 function ModeToggle({ mode, onChange }: ModeToggleProps) {
   const { t } = useTranslation();
+
+  function handleKeyDown(e: React.KeyboardEvent) {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    e.preventDefault();
+    const idx = MODE_ORDER.indexOf(mode);
+    const next =
+      e.key === 'ArrowRight'
+        ? MODE_ORDER[(idx + 1) % MODE_ORDER.length]
+        : MODE_ORDER[(idx - 1 + MODE_ORDER.length) % MODE_ORDER.length];
+    onChange(next);
+  }
+
   return (
-    <div className="inline-flex p-1 rounded-full bg-surface-container-highest self-start">
-      <button
-        type="button"
-        onClick={() => onChange('global')}
-        aria-pressed={mode === 'global'}
-        className={`px-4 py-2 rounded-full text-body-medium font-body-medium transition-colors ${mode === 'global' ? 'bg-on-surface text-white' : 'text-on-surface-variant hover:text-on-surface'}`}
-      >
-        {t('explain.allListings')}
-      </button>
-      <button
-        type="button"
-        onClick={() => onChange('estimate')}
-        aria-pressed={mode === 'estimate'}
-        className={`px-4 py-2 rounded-full text-body-medium font-body-medium transition-colors ${mode === 'estimate' ? 'bg-on-surface text-white' : 'text-on-surface-variant hover:text-on-surface'}`}
-      >
-        {t('explain.oneEstimate')}
-      </button>
+    <div
+      role="radiogroup"
+      aria-label={t('explain.modeToggleLabel')}
+      onKeyDown={handleKeyDown}
+      className="inline-flex p-1 rounded-full bg-surface-container-highest self-start"
+    >
+      {MODE_ORDER.map((m) => {
+        const active = mode === m;
+        return (
+          <button
+            key={m}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            tabIndex={active ? 0 : -1}
+            onClick={() => onChange(m)}
+            className={`px-4 py-2 rounded-full text-body-medium font-body-medium transition-colors ${
+              active
+                ? 'bg-on-surface text-white'
+                : 'text-on-surface-variant hover:text-on-surface'
+            }`}
+          >
+            {m === 'global' ? t('explain.allListings') : t('explain.oneEstimate')}
+          </button>
+        );
+      })}
     </div>
   );
 }

@@ -324,13 +324,16 @@ is collected here so the next maintainer knows what was approximated.
     just those that survived serving-manifest pruning.  Reported in F7's
     final reply — not silently omitted.
 
-44. **Client-templated Plain Synthesis text (F8)** — the "Plain Synthesis"
-    sentence in the Explainability screen is templated client-side from
-    the driver list (e.g. "This estimate is primarily driven by [feature 1]
-    (+X%), [feature 2] (-Y%), and [feature 3] (+Z%).").  The backend does
-    NOT generate natural-language synthesis (B2 doesn't mention it).
-    Reported in F8's final reply — the template logic is in
-    `explainability/helpers.ts`.
+44. **Client-templated Plain Synthesis text (F8) — PARTLY RESOLVED in P6b.**
+    The "Plain Synthesis" sentence in the Explainability screen is still
+    templated client-side from the driver list — the backend does NOT
+    generate natural-language synthesis (B2 doesn't mention it).  P6b
+    (#148) rewrote the wording honestly (mean |SHAP| is the average size
+    of a feature's push on the predicted log price — NOT a "share of
+    price variation"), moved it to i18n (en + sw, plural-safe 1/2/3+),
+    and added the unit sentence.  A backend-generated synthesis remains
+    a suggestion, not built.  The template helpers live in
+    `explainability/helpers.ts` + the i18n keys `explain.synthesis.*`.
 
 45. **Fixed non-live exchange rate (F9)** — the KSh ↔ USD toggle uses a
     fixed rate of 1 USD = 129 KSh (approximate mid-market rate as of late
@@ -403,100 +406,71 @@ is collected here so the next maintainer knows what was approximated.
 
 ## G1 — Overview page visual-fidelity pass
 
-51. **Overview page: design elements found but NOT built (G1)** — the
-    following sections appear in `01_overview/code.html` (web design) but
-    were never implemented in `src/features/overview/`. They are flagged
-    for deliberate review, not silently added:
+51. **Overview page: design elements found but NOT built (G1) — SUPERSEDED
+    by the Overview build round (O1/O2, 2026-11-17).** The elements below
+    were originally reported as "not built" by the G1 fidelity pass.
+    The build round adds a new backend endpoint (`GET /overview/summary`)
+    that owns every corpus-wide statistic the page shows, plus the
+    frontend cards the design calls for.  Sub-item status (see #89–#97
+    below for the build-round entries):
 
-    a. **"Price by property type" bar chart** (Row 3, Card 2) — a vertical
-       bar chart with hatched bars for Agricultural/Residential/Industrial
-       and a solid highlighted bar for Commercial, plus a floating pill
-       badge showing "KSh 6.2M" on the Commercial bar. Requires a new data
-       source (median price per property type) that the Overview hooks
-       don't currently fetch.
+    a. **"Price by property type" bar chart** — RESOLVED (O2).  Three
+       bars (Land / Farm / Commercial — the canonical types), hatched
+       non-leader bars + solid orange leader with a floating value pill.
+       Footer line from the response's `by_property_type.leader` /
+       `leader_premium_pct`.
+    b. **"Price by size band" line chart** — RESOLVED (O2).  National
+       series (solid orange) + dashed near-black county series when a
+       county filter is applied.  Vertex markers + low_support hollow
+       bands.  No "+4%" chip — the design's reference for that percentage
+       could not be derived from the data (reported as a decision).
+    c. **Floating tooltip card on the price-by-distance chart** —
+       RESOLVED (O2).  Pinned corridor annotation built from
+       `by_distance_band` (median / q1 / q3 / n per band).
+    d. **3 micro utility buttons on the price-by-distance card header** —
+       PARTIALLY RESOLVED (O2).  Refresh (spinning state) and download
+       (CSV of the plotted sample) are wired.  The calendar/quarterly
+       filter is NOT built — listings carry no date field, so the button
+       would be dead; reported in #96.
+    e. **Anomaly flag note on the deal-signals card** — RESOLVED (O2).
+       Reads `totals.n_flagged` from the overview response; pluralised
+       correctly; hidden when 0; links to Deal Finder with the
+       `data_quality_flag=true` filter applied.
+    f. **Sync/refresh button on the deal-signals card header** —
+       RESOLVED (O2).  Refetches the overview query.
+    g. **Mobile KPI hero card + 2x2 grid** — RESOLVED (O2).  Hero card
+       for national median per acre (with the All-Kenya/selected-county
+       pill + middle-half chip), then a 2x2 grid of compact metric tiles
+       (sample, coverage, typical error, range holds).
+    h. **Mobile "Filters (n)" button + removable filter chips** —
+       RESOLVED (O2).  Bottom sheet with the two selectors, plus
+       removable chips under the header.
+    i. **"Live Feed" badge next to the mobile page title** — RESOLVED
+       (O2).  Shown only while `/health` reports `ok` (green pulse);
+       amber degraded style otherwise.
+    j. **Disclaimer footer** — RESOLVED (O2).  "Statistical estimate,
+       not an official valuation.  Map data © OpenStreetMap
+       contributors.  <model version from /meta>".
 
-    b. **"Price by size band" line chart** (Row 3, Card 3) — a dual-line
-       chart showing the national model curve (solid orange) vs a selected
-       county benchmark (dashed near-black), with vertex markers at
-       1/8¼½1-5-20+ acre breakpoints. Requires a size-band aggregation
-       endpoint that doesn't exist.
+52. **Overview page: trend-line shape (G1)** — unchanged.  The design's
+    cubic Bezier is an aesthetic mockup; the O2 implementation plots a
+    STRAIGHT line from the response's `trend.slope` / `trend.intercept`
+    (server-computed OLS log-linear fit), which is the statistically
+    correct shape for `price = a · e^(-b · distance)` on a log-Y axis.
 
-    c. **Floating tooltip card on the price-by-distance chart** — the
-       design shows a pinned tooltip "50–100 km corridor · Median KSh 1.8M
-       · Range 0.9–3.2M · 74 lst" floating over the chart. The current
-       chart has hover tooltips only (no pinned corridor annotation).
+53. **Overview page: scatter vs median-per-band (G1)** — PARTIALLY
+    changed.  The O2 implementation plots BOTH: the scatter dots from
+    `scatter_sample` (the design's median points are insufficient — they
+    hide the data cloud), AND an optional per-band median overlay
+    (toggleable) that draws the `by_distance_band` medians as a separate
+    line.  The scatter is the default view; the band overlay is the
+    "Bands" toggle.
 
-    d. **3 micro utility buttons on the price-by-distance card header**
-       (refresh, calendar/quarterly filter, download/export) — the design
-       has these in the card's top-right; the current card has none.
-
-    e. **Anomaly flag note on the deal-signals card** — the design shows
-       "12 listings flagged as possible data anomalies" with an
-       `error_outline` icon in a surface-container-low pill at the bottom
-       of the card. Requires a data-anomaly count from the backend's
-       data-review endpoint, which the Overview page doesn't currently
-       fetch.
-
-    f. **Sync/refresh button on the deal-signals card header** — the
-       design has a `sync` icon button in the card's top-right; the
-       current card has none.
-
-    g. **Mobile KPI hero card + 2x2 grid** — the mobile design
-       (`01_mobile_overview`) uses a fundamentally different KPI layout:
-       one large "hero" KPI card (National median per acre with show_chart
-       icon + typical-range pill) followed by a 2x2 grid of compact metric
-       tiles. The current app uses the same flat 2/3/5-column grid at all
-       breakpoints. Implementing the mobile hero layout is a responsive
-       design change that would require a separate mobile KpiRow variant.
-
-    h. **Mobile "Filters (2)" button + removable filter chips** — the
-       mobile design uses a single "Filters (2)" button that opens a
-       filter sheet, plus removable active-filter chips ("County: Kiambu
-       ×", "All property types ×"). The current app uses two separate
-       PillDropdown components at all breakpoints.
-
-    i. **"Live Feed" badge next to the mobile page title** — the mobile
-       design shows a green-pulsing "Live Feed" pill badge next to
-       "Overview"; the current app has no such indicator.
-
-    j. **Disclaimer footer** — the mobile design has a footer reading
-       "Statistical estimate, not an official valuation. Map data ©
-       OpenStreetMap contributors. Ensemble model v1"; the current app has
-       no page-level footer.
-
-52. **Overview page: trend-line shape (G1)** — the design's
-    price-by-distance chart shows a hand-drawn cubic Bezier CURVE as the
-    trend line; the current implementation uses an OLS-fitted STRAIGHT
-    line (on a log-scale Y axis, this represents exponential decay —
-    `price = a·e^(-b·distance)`). The straight line is the statistically
-    correct fit for real data; the design's curve is an aesthetic mockup.
-    Not changed — the OLS approach is correct for real data and is the
-    same computation Market Insights uses (`computeLogTrend` in
-    `market-insights/helpers.ts`).
-
-53. **Overview page: scatter vs median-per-band (G1)** — the design's
-    chart plots a few MEDIAN points (one per distance band) connected by
-    the trend curve; the current implementation plots ALL individual
-    listings as scatter dots. The scatter approach is more informative
-    (shows the actual data cloud and outliers) and is what a real
-    analytics dashboard would show. Not changed — switching to
-    median-per-band would reduce information density.
-
-54. **Haversine consistency: VERIFIED (G1)** — the Overview page's
-    client-side `haversineKm` (`overview-helpers.ts`) and the backend's
-    `haversine_km` (`landval/features/geo.py`) produce IDENTICAL results
-    (max diff 2.84e-13 km across 11 test points spanning 0–446 km from
-    Nairobi — floating-point noise). Both use R=6371.0, the same formula
-    (`R·2·atan2(√a, √(1-a))`), and the same Nairobi reference point
-    (-1.2921, 36.8219). The only divergence is the backend's `round(x, 2)`
-    before storing in the parquet/export (≤0.005 km / 5 metres rounding
-    error — invisible on a scatter chart). Market Insights reads the
-    backend's `dist_to_nairobi_km` column directly (not a client-side
-    haversine), so the two pages agree to within rounding precision.
-    **Caveat:** the backend reads the reference point from
-    `scoring_params.json` (`ref.get("latitude", -1.2921)`) — if that file
-    overrides the default, the backend would use a different point. With
-    the shipped default, they match exactly.
+54. **Haversine consistency: VERIFIED (G1)** — unchanged.  The O1
+    endpoint reuses the same shared `compute_distances_to_nairobi`
+    helper the Counties router was refactored to use, so all three
+    endpoints (Counties per-listing, Overview distance bands, model
+    training) agree to floating-point precision.
 
 ## G2 — Predictor page visual-fidelity pass
 
@@ -1053,3 +1027,861 @@ is collected here so the next maintainer knows what was approximated.
 88. **About: reported design elements not built** — the "M13 About"
     design-file label (deliberately not rendered); a web-specific design
     (none exists — desktop is a sensible single-column extension).
+
+
+## Overview build round (O1 / O2, 2026-11-17)
+
+89. **O1 — `GET /api/v1/overview/summary` RESOLVED.** New read-only
+    endpoint computes every corpus-wide statistic the Overview page
+    shows, over the WHOLE usable frame already in memory (so the page
+    stops deriving statistics from page 1 of `/listings/scored`, which
+    is sorted most-underpriced-first and is therefore a biased sample).
+    Files added:
+
+    - `backend/app/schemas/overview.py` — Pydantic response schema +
+      the canonical lists (`PROPERTY_TYPES`,
+      `SIZE_BAND_EDGES_ACRES`, `DISTANCE_BAND_EDGES_KM`) that the
+      frontend never re-types.
+    - `backend/app/services/overview.py` — pure computation module
+      (`compute_overview_summary`) so every number is unit-testable
+      without HTTP.  Vectorised pandas/numpy; deterministic scatter
+      sample (fixed seed, never `head()`).  No caching — the dataset
+      is ~1k rows and the whole summary computes in single-digit ms.
+    - `backend/app/api/v1/routers/overview.py` — router that loads the
+      frame via `AppExportsRegistry.require`, validates `county` /
+      `prop_type` against the data (422 with `allowed` list on
+      unknown), and calls `compute_overview_summary`.
+    - `backend/tests/test_overview.py` — 29 tests: happy path,
+      filters, validation, band-edge semantics, hand-computed
+      leader-premium / bulk-discount, deterministic + unbiased
+      scatter sample (verified against a sorted-by-verdict frame),
+      empty selection, degraded 503, unmapped prop_type counting,
+      no-NaN-in-JSON.
+
+    Files touched:
+
+    - `backend/app/main.py` — registered the overview router.
+    - `backend/app/api/v1/routers/counties.py` — refactored to use
+      the shared `compute_distances_to_nairobi` helper instead of
+      hard-coded `NAIROBI_LAT` / `NAIROBI_LON` constants.  The
+      Counties and Overview endpoints now agree with each other and
+      with the model's training feature (the helper reads
+      `scoring_params.json` if present, else falls back to the
+      canonical default).
+    - `src/landval/features/geo.py` — added the canonical
+      `NAIROBI_REFERENCE_LAT` / `NAIROBI_REFERENCE_LON` constants
+      (single source of truth, no app dependencies so the shared
+      library stays standalone).
+    - `backend/app/services/geo_reference.py` — NEW backend service
+      that reads `scoring_params.json` for the Nairobi reference and
+      exposes the shared `compute_distances_to_nairobi` helper.
+    - `docs/api.md` — added the endpoint section + a
+      biased-sample warning on `/listings/scored`.
+    - `docs/openapi.snapshot.json` — regenerated.
+
+90. **O1 — canonical lists decision.** The endpoint owns three
+    canonical lists and returns them in the response so the frontend
+    never re-types them:
+
+    - `PROPERTY_TYPES = ["Land", "Farm", "Commercial"]` — replaces the
+      design's Agricultural / Residential / Commercial / Industrial
+      labels (mock content).  Rows whose `prop_type` is not in this
+      list are NOT silently dropped or relabelled — they are counted
+      under `unmapped_prop_type_rows` and logged as a warning.
+    - `SIZE_BAND_EDGES_ACRES = [0, 1/8, 1/4, 1/2, 1, 5, 20, +inf]` (7
+      bands; the `+inf` tail is returned as `null` in JSON).  Labels:
+      `["<1/8 ac", "1/8-1/4 ac", "1/4-1/2 ac", "1/2-1 ac", "1-5 ac",
+      "5-20 ac", "20+ ac"]`.  Value on an edge goes to the UPPER band
+      (the one whose lower edge equals the value) — documented.
+    - `DISTANCE_BAND_EDGES_KM = [0, 25, 50, 100, 200, 400, +inf]` (6
+      bands).  Labels: `["0-25 km", "25-50 km", "50-100 km",
+      "100-200 km", "200-400 km", "400+ km"]`.
+
+    The size-band scheme splits `[5, 20)` and `[20, +inf)` into two
+    bands so the design's "5 Ac" and "20+ Ac" vertex labels each map
+    to a distinct band.  If the person prefers 6 bands (merging
+    [5, 20) and [20, +inf) into a single "20+ ac" band that covers
+    [5, +inf)), the change is a one-line edit to the edges list +
+    labels list.
+
+91. **O1 — `min_county_n` threshold.** The `low_support` flag on size
+    and distance bands uses the same `COVERAGE_MIN_COUNTY_N` value
+    `/meta` reports (read from `coverage_rules.json` via the
+    ArtifactRegistry).  When the coverage rules file is missing the
+    threshold falls back to the manifest's documented default of 10
+    — surfacing the same value `/meta` would return null, so the
+    operator can see the threshold is unknown rather than silently
+    hiding it.  If the person wants bands to use a different
+    threshold (e.g. a per-band minimum of 5 rather than the
+    per-county 10), that is a config change to surface in `/meta`.
+
+92. **O1 — `n_counties_total`.** The total county count comes from
+    the county boundaries service when loaded (the same service
+    `/counties/boundaries` uses).  When boundaries are not loaded
+    (degraded mode), the endpoint falls back to the count of
+    distinct counties in the data — NOT a literal `47`.  The
+    fallback is honest: it tells the user "we know about N
+    counties" rather than asserting the constitutionally-defined
+    count when the boundaries file isn't present.
+
+93. **O2 — Overview frontend RESOLVED.** The Overview page is
+    rebuilt against `useOverviewSummary(filters)`; every number on
+    the page comes from the response (or from `/meta` / `/model/metrics`
+    / `/health` for the few national fields the overview endpoint
+    does not duplicate).  Removed client-side verdict-count /
+    sample-median / OLS code (those are now backend-owned).  See
+    the merge notes for the full file list.
+
+94. **O2 — "Terra Kenya AI - v2.4" header text REMOVED.** The shell
+    header previously displayed a hard-coded version string.  Now
+    reads the real `model_version` from `/meta` (hidden when null)
+    + the live date/time formatted with `Intl` from the browser
+    clock.  No hard-coded "EAT" — the timezone abbreviation comes
+    from the browser.
+
+95. **O2 — permanent orange bell dot REMOVED.** The shell header's
+    notifications icon previously always had an orange dot.  Now
+    hidden unless driven by real state (no fake notification
+    badges).
+
+96. **O2 — calendar/quarterly filter button NOT BUILT.** The
+    design's price-by-distance card header has three micro buttons
+    (refresh, calendar, download).  The calendar/quarterly filter
+    has no data behind it — `listings_scored.parquet` carries no
+    date column.  Rendering a dead button would mislead the user.
+    Not built; refresh + download are wired.
+
+97. **O2 — "+4%" chip on size-band card NOT BUILT.** The design's
+    Price-by-size-band card shows a green "+4%" chip next to the
+    headline "KSh 3.4M" value.  The percentage's reference (vs.
+    what baseline?) cannot be derived from the data the endpoint
+    returns — it's mock content.  Omitted; the headline number is
+    the median at the 1-acre band (the design's "1 Ac" vertex,
+    documented in the card caption), and the chip is omitted
+    rather than fabricating a percentage.
+
+98. **O2 — "Nairobi Metro" comparison line NOT BUILT when no county
+    selected.** The design's size-band card shows a dashed
+    near-black "Nairobi Metro" line as the comparison series.  The
+    endpoint returns a `comparison` series ONLY when a county filter
+    is applied (without a county there is no defined comparison
+    group).  Without a county selected, only the national series is
+    drawn; the design's "Nairobi Metro" label is not fabricated.
+
+99. **O2 — Deal Finder / Market Insights URL param integration.**
+    Deal Finder reads `?county=&verdict=&prop_type=&flagged=` from
+    the URL on first render (the anomaly-note link and the
+    verdict-tile links use these).  Market Insights reads
+    `?county=`.  Both keep their own state afterwards.  The
+    `data_quality_flag` filter on the Deal Finder query type was
+    already present (the listings router supports it); no schema
+    change was needed.
+
+100. **O2 — Predictor prefill.** The "Estimate a price" button on
+     the Overview header passes the selected county to the Predictor
+     via `?county=` ONLY if the Predictor already supports a
+     prefill hook.  The current Predictor does not read URL params
+     on mount, so the button navigates without a prefill for now —
+     reported as a decision, not built.
+
+101. **O2 — Vitest + React Testing Library added.** The frontend
+     had no test runner before this round.  Added as devDependencies
+     only (`vitest`, `@testing-library/react`, `jsdom`,
+     `@testing-library/jest-dom`); the `npm run test` script runs
+     them.  Unit-tests the pure helpers (formatters, URL filter
+     parsing, CSV export, abbreviation, band-label mapping) and
+     component-tests one card per state (loading / error / empty /
+     data).  Kept small and fast.
+
+102. **O2 — Kiswahili translations marked for review.** Every new
+     Overview string was added to the i18n files in both `en` and
+     `sw`.  Kiswahili translations I am not 100% sure of are marked
+     with a `// TODO(sw): review` comment in `src/lib/i18n/sw.ts` —
+     the person should review those before shipping.
+
+
+## P2b — Price Predictor real-data wiring (2026-11-17)
+
+103. **P2b — `GET /api/v1/predict/options` RESOLVED.** New read-only
+     endpoint returning the canonical property-type list (Land/Farm/
+     Commercial with per-type row counts), the parcel-size bounds
+     (1st/99th percentile + median from the loaded frame), the default
+     + allowed confidence levels, and the ten infrastructure checklist
+     keys — all from the backend so the frontend never re-types them.
+     Files: `backend/app/schemas/canonical.py` (shared constants),
+     `backend/app/schemas/predict_options.py`, `backend/app/services/
+     predict_options.py`, `backend/app/api/v1/routers/predict_options
+     .py`, `backend/tests/test_predict_options.py` (18 tests).
+     OpenAPI snapshot regenerated; docs/api.md updated.
+
+104. **P2b — POST /predict prop_type validation RESOLVED.** The request
+     now validates `prop_type` against the canonical list
+     (case-insensitive, normalised to canonical casing).  Unknown
+     values return 422 with `allowed` in details.  The model's
+     preprocessor groups unseen categorical values into "Other" at
+     transform time, so this validation does NOT change inference for
+     the canonical three.  [backend-ready]
+
+105. **P2b — PROP_TYPE_OPTIONS removed from frontend RESOLVED (A).**
+     The predictor-helpers.ts `PROP_TYPE_OPTIONS` list (which included
+     Residential, Industrial, Plot) is gone.  Pills now render from
+     `usePredictOptions().property_types` — three only (Land/Farm/
+     Commercial).  Default selection = first returned value.
+
+106. **P2b — step captions + default confidence RESOLVED (B).** Step
+     captions go through i18n with interpolation
+     (`predictor.stepCaption` = "Step {{n}} of {{total}}").  The
+     `DEFAULT_CONFIDENCE_LEVEL = 0.8` constant is gone — the default
+     comes from `options.default_confidence_level`.  All "80% range"
+     wording is built from `response.confidence_level`.
+
+107. **P2b — size input bounds + validation RESOLVED (C).** The size
+     input's min/max/step come from `options.size_acres` (1st/99th
+     percentile).  The placeholder "1.5" is replaced with a templated
+     hint derived from the median size.  Inline validation messages
+     (empty, <=0, below/above range) are translated.  The button stays
+     disabled with a visible reason.
+
+108. **P2b — `#E3A008` inline hex replaced with design token RESOLVED
+     (D).** The two inline `bg-[#E3A008]/10` / `text-[#E3A008]`
+     references in PredictResult.tsx are replaced with
+     `bg-market-caution/10` / `text-market-caution` (the token already
+     exists in tailwind.config.ts).  The `#6B7A90` inline hex in
+     DriversList.tsx is replaced with `bg-market-neutral` /
+     `text-market-neutral`.  Remaining hex values in
+     NearbyInfrastructure.tsx (`#E8742A`, `#9D4400`, `#E3A008`) are
+     passed as the `color` prop to ScoreRing — the component's API
+     takes a raw SVG stroke color (not a tailwind class); these mirror
+     the tailwind tokens' values exactly.  Reported as a legit UI
+     constant.
+
+109. **P2b — Title Documentation field REMOVED RESOLVED (E).** The
+     disabled "Title number / deed reference" input in the unsupported
+     state is removed entirely.  It was frontend-only, never wired to
+     the backend, and collected data that was discarded.  The
+     `TITLE_DOC_KEY` sentinel is gone from predictor-helpers.ts.  The
+     request body never includes a title key.
+
+110. **P2b — i18n for all predictor strings RESOLVED (F).** Every
+     user-visible string in the feature goes through i18n (en + sw).
+     Parcel feature labels are keyed by the backend's key names
+     (`predictor.feature.borehole` etc.).  Kiswahili translations
+     marked `// TODO(sw): review` need native review.
+
+111. **P2b — money honours KSh/USD toggle RESOLVED (G).** Every
+     `formatMoney` call in the feature uses the currency-aware
+     formatter from `@/lib/currency/format`.  The rate is config-driven
+     (served via /meta's `fx` block from the O3 round).
+
+112. **P2b — result-state logic from coverage only RESOLVED (H).**
+     `deriveResultState` uses ONLY `coverage.is_low_support` and
+     `coverage.nearby_listings` — no typed thresholds.  Every copy
+     containing coverage numbers is templated from the response.
+
+113. **P2b — canonical constants module created.** The canonical lists
+     (`PROPERTY_TYPES`, `PARCEL_CHECKLIST_FIELDS`,
+     `DEFAULT_CONFIDENCE_LEVEL`, `ALLOWED_CONFIDENCE_LEVELS`) now live
+     in `backend/app/schemas/canonical.py` — the single source of truth
+     shared between the Overview and Predict endpoints.  The Overview
+     schema imports from there (the old duplicate definition in
+     `overview.py` is removed).
+
+114. **P2b — ScoreRing hex colors are legit UI constants.** The three
+     hex values (`#E8742A`, `#9D4400`, `#E3A008`) passed to ScoreRing
+     in NearbyInfrastructure.tsx mirror the tailwind tokens
+     (`primary-container`, `primary`, `market-caution`).  ScoreRing's
+     API takes a raw SVG stroke color (not a tailwind class), so these
+     cannot be replaced with token references without refactoring the
+     ScoreRing component.  Left as-is with a comment explaining the
+     mapping.  [needs-decision: refactor ScoreRing to accept a token
+     name?]
+
+115. **P2b — Kiswahili parcel feature translations need native review.**
+     The `predictor.feature.*` keys are marked `// TODO(sw): review` in
+     the Kiswahili locale.  The person should review before shipping.
+
+
+## P3b — Market Insights real-data round (2026-11-17)
+
+116. **P3b — /counties/summary prop_type + data-driven bands RESOLVED
+     (A, B, D).**  The property-type filter is real: an EXACT
+     case-insensitive canonical match (unknown -> 422 with `allowed`);
+     when set, per-county aggregates are recomputed on the filtered
+     frame and the band edges (quintiles of the eligible counties'
+     medians) are recomputed so the legend always matches the map.  The
+     typed PRICE_BANDS thresholds (1.5M/3M/6M/12M) and their labels are
+     gone — the frontend only maps a band INDEX to a colour token.
+     min_county_n comes from the manifest config and is null +
+     data_quality="min_county_n_missing" when absent (no typed 10).
+     [backend-ready]
+
+117. **P3b — /counties/{county}/distance-profile NEW RESOLVED (E).**
+     Whole-county profile: n, ranges, server-side OLS trend, and a
+     deterministic unbiased sample (fixed seed, never head() of a sorted
+     frame — the frame IS sorted most-underpriced-first, so a page
+     sample would be biased).  Low-support counties omit the trend.
+     [backend-ready]
+
+118. **P3b — rank-list display density (C).**  The list shows top N /
+     bottom N where N=10 is a DISPLAY-DENSITY constant (a named UI
+     constant with a comment — how many rows fit the card, not a data
+     fact).  When eligible counties < 2*N the list splits at the
+     midpoint so no county appears in both lists; the caption
+     interpolates the count actually shown.  [architecture-decision: N
+     is adjustable per breakpoint if the person wants]
+
+119. **P3b — URL state + boundaries key (G, J) RESOLVED.**  ?county=&type=
+     read on mount (invalid ignored) + written on change (replace for
+     county clicks); the "See in Deal Finder" button passes both params.
+     The boundaries payload's documented `properties.county` key (the
+     same key the backend's own county_boundaries.py reads) is now the
+     ONLY key the frontend reads — the six-key guessing is gone.
+
+120. **P3b — Kiswahili + locale (F, H).**  Every Market Insights string
+     is in i18n (en + sw; sw marked for native review); numbers go
+     through the locale helper (no `toLocaleString('en-KE')`
+     call-sites).  [needs-backend-work: none]
+
+121. **P3b — design-vs-data discrepancy: the band-colour count.**  The
+     design's legend shows FIVE orange steps; the response's bands are
+     quintiles over the eligible counties, so with few counties the
+     response may return FEWER bands (or none, with bands_reason).
+     Decision: the frontend renders exactly the bands the response
+     returns (fewer colours when data is thin) + a reason line — never
+     inventing edges to fill five slots.  [architecture-decision]
+
+
+## P4b — Deal Finder real-data round (2026-11-17)
+
+122. **P4b — server-side sort + order param RESOLVED (A).**  The
+     Best/Worst toggle now sends `sort` + `order` to /listings/scored
+     and the client re-sort is deleted.  The backend sort is stable
+     with a listing_no tiebreaker: page N+1 asc starts where page N asc
+     ended; desc is the exact reverse of asc.  [backend-ready]
+
+123. **P4b — substring -> exact filter semantics RESOLVED (B, D).**
+     prop_type (canonical three) and county are now EXACT
+     case-insensitive matches; unknown -> 422 with `allowed`.  This is
+     a DOCUMENTED breaking change (docs/api.md); no frontend caller
+     relied on substring behaviour (verified by search).
+
+124. **P4b — /listings/options NEW RESOLVED (C, E, I).**  Every option
+     list + limit the filters bar renders: property types, exact
+     counties, verdicts with data-derived rules (basis = the
+     conformal-interval comparison verified on the frame with
+     match_rate; empirical ratio cut-offs), amenities + radii +
+     availability, page sizes, sort keys, export cap.  PAGE_SIZE options
+     and the default come from the backend.
+
+125. **P4b — /listings/{listing_no}/nearby NEW RESOLVED (G).**  DealMap
+     draws REAL haversine-nearest listings (self-excluded) from the
+     endpoint; the old page-1-rows-as-"nearby" approach is deleted
+     (MAX_SECONDARY_MARKERS is gone — the cap is the endpoint's limit).
+
+126. **P4b — /listings/scored/export.csv NEW RESOLVED (H).**  Streaming
+     server-side export: same filters + sort, UTF-8 BOM, raw KSh money
+     columns, filter-built filename, truncation surfaced via
+     X-Export-Truncated headers (cap only when LISTINGS_EXPORT_MAX_ROWS
+     is configured).  The client page-walking EXPORT_ROW_CAP +
+     window.alert are deleted.
+
+127. **P4b — detail panel out-of-range RESOLVED (J).**  The predicted
+     range visualizer no longer clamps the asking marker into the band
+     (Math.max(1, ...) is gone): the asking price may fall outside —
+     arrows + "asking is X% above/below the range" computed from the
+     row's own low/high.  Missing or equal low/high renders an honest
+     "range not available".
+
+128. **P4b — URL state + selected-row clearing RESOLVED (L).**
+     ?county=&type=&verdict=&flagged=&amenity=&radius=&sort=&order=&page=&size=
+     read on mount (invalid ignored) + written on change; page clamps
+     to 1 when it exceeds total_pages; the selected row clears when
+     it's no longer in the result set.
+
+129. **P4b — verdict hex colours (K) RESOLVED.**  One verdict-styles
+     module (its own file, react-refresh-clean) holds the token map;
+     ResultsTable chips, DealMap markers, and the detail panel chip all
+     import it.
+
+130. **P4b — verdict meaning explained RESOLVED (I).**  A help popover
+     on each verdict chip shows the response's rule: the interval
+     comparison basis, the empirical ratio cut-offs, and the match rate
+     — all numbers from the response, no typed percentages.
+
+131. **P4b — Kiswahili + locale (M) RESOLVED.**  All Deal Finder
+     strings in i18n (en + sw; sw marked for native review); numbers
+     via the locale helper; money via the currency-aware formatters.
+
+
+## P5b — Model Performance real-data round (2026-11-17)
+
+132. **P5b — error-by-support already wired (A) CONFIRMED + P5b
+     enrichments.**  The P5 round wired GET /model/error-by-support;
+     this round adds `band_order` (ascending ordinal per
+     support_measure group so the UI never parses band strings) +
+     `support_measures` with i18n label keys.  The band label is
+     served verbatim from the notebook's export.  [backend-ready]
+
+133. **P5b — log-scale CI unit bug RESOLVED (B).**  The tooltip's
+     Math.round() on ~0.5 log-scale values (showing "0 - 1") is
+     replaced with 3-decimal formatting; the axis is labelled "RMSE,
+     log scale"; and a one-line plain-language note converts the
+     chart's own RMSE to an approximate typical-miss % via exp(x)-1
+     (the formula documented in metrics-helpers + the test suite).
+
+134. **P5b — production-run row filtering RESOLVED (C).**  Only the
+     production run's rows are charted (metrics_json.production_run);
+     the card subtitle shows production_run_label from the response.
+
+135. **P5b — interval levels from the response RESOLVED (D).**  The
+     typed {level:'50% range', target:0.5} array is gone — the bars
+     build from `interval_levels` (backend-derived from the artifact's
+     interval_coverage_weighted_ensemble entries, else the populated
+     coverage columns).  The KPI tile uses default_interval_level.
+
+136. **P5b — ensemble row by name only RESOLVED (E).**  The backend
+     returns `ensemble_model`; the frontend resolves the row by that
+     value ONLY (substring + highest-weight fallbacks deleted; "not
+     available" when absent).  Per-model display_name + family come
+     from `model_info` (the neural-member grey styling keys off family,
+     not a name substring).
+
+137. **P5b — KPI copy + decimals RESOLVED (F).**  Tile labels build
+     from response fields (ensemble display name, interval_method);
+     percentages show ONE decimal; the "80% range hit rate" label is
+     templated from default_interval_level.
+
+138. **P5b — shared compact money formatter RESOLVED (G).**  The local
+     formatCompactKSh is deleted; the MAE tile uses the shared
+     formatCompactMoney (the KSh/USD toggle applies).
+
+139. **P5b — n_test surfaced RESOLVED (H).**  The summary line shows
+     "For N test listings…" from n_test (row count of the loaded
+     test_predictions parquet); the MAE line is an i18n string with
+     the shared formatter, hidden when null.
+
+140. **P5b — weights decimals RESOLVED (K).**  EnsembleWeights shows
+     one-decimal weights exactly as loaded; the "sums to 100%" line
+     only renders when the exact sum equals 100% within rounding
+     (never force-normalised).
+
+141. **P5b — Kiswahili + locale (J) RESOLVED.**  All Model Performance
+     strings in i18n (en + sw; sw marked for native review); chart tick
+     values via the locale helper.
+
+142. **P5b — sr-only tables fix.**  The a11y value tables are wrapped
+     in sr-only divs (a bare sr-only table keeps its intrinsic width
+     and overflowed mobile); verified 390 = 390 on mobile after the fix.
+
+142b. **P5b — chart hex colours consolidated on the global tokens module
+     (I final pass, 2026-11-18).**  The scattered `#e8742a` / `#6a5b56` / `#574238`
+     / `#1f1b16` literals in `ActualVsPredicted.tsx`,
+     `ModelComparison.tsx`, and `ErrorBySupportBars.tsx` are replaced
+     by imports from the existing global `frontend/src/lib/ui/chart-tokens.ts`
+     (introduced in P6b problem J).  Two new tokens added in this round:
+     `CHART_COLOR_ON_SURFACE` (`#1f1b16`, mirrors tailwind `on-surface`)
+     and `CHART_COLOR_TERTIARY` (`#006d3b`, mirrors tailwind `tertiary`).
+     After this pass, `rg '#[0-9a-fA-F]{6}' frontend/src/features/model-performance/`
+     returns ZERO matches outside the test fixtures.  [backend-ready]
+
+## P6b — Explainability honest-coverage round (2026-11-18)
+
+143. **P6b — coverage "recomputed" claim RESOLVED (A).**  The donut
+     (and the old component comment) claimed the shares were
+     "recomputed by the backend from the actually-loaded ensemble" —
+     but /model/explainability served the notebook-time
+     `manifest.json:ensemble_shap_coverage` verbatim.  Now the backend
+     recomputes from the loaded registry's weights when it is up
+     (`source: "recomputed"`, the ONE shared function
+     `landval.modelling.coverage.shap_coverage_from_weights` — the same
+     computation the registry method and the live /predict coverage
+     block use, so the three surfaces cannot disagree), and falls back
+     to the normalised manifest values with `source: "manifest"`.  The
+     UI shows which source produced the numbers ("Computed from the
+     loaded model." vs "From the training-time report.").  The shared
+     function was extracted rather than duplicated: registry.py +
+     explain.py + services/explainability.py all call it.
+
+144. **P6b — donut unit-guessing + silent renormalisation RESOLVED (B).**
+     The `> 1 ? /100 : x`, `Math.max(0.0001, sum)` and forced
+     `100 - first` logic is deleted.  The backend serves fractions in
+     [0,1] with documented keys; the frontend renders what it gets and
+     shows an honest "Coverage not available" state when the shares are
+     missing or do NOT sum to ~1 (tolerance = SHARES_SUM_TOLERANCE,
+     a commented UI constant defined once).
+
+145. **P6b — typed slice names RESOLVED (C).**  "Tree models (SHAP)" /
+     "TabNet (not covered)" are gone; slice names build from
+     `explained_members` / `unexplained_members` display names (via the
+     payload's `models` list).  When the manifest path leaves members
+     null, the wording makes no member claims ("Explained by SHAP").
+
+146. **P6b — hard-wired model 'xgb' RESOLVED (D).**  GlobalShapBars /
+     index never key off a member name.  The backend serves `models`
+     [{key, display_name, family, ensemble_weight, has_shap}] ordered
+     by weight + `default_model`; a selector renders only when >1
+     SHAP-covered model exists (tabnet is in the list but never
+     selectable); captions/empty states interpolate the selected
+     model's display name.
+
+147. **P6b — display density constants (E).**  TOP_N_BARS (10) and
+     SYNTHESIS_TOP_N (5) are named, defined once, commented "display
+     density, not a data fact"; captions interpolate the number
+     actually shown ("Top {{n}} features…").
+
+148. **P6b — honest synthesis wording RESOLVED (F).**  The old English
+     sentence called mean |SHAP| a "share of price variation" — wrong.
+     Rewritten: "the features that move the estimate most are A, B and
+     C" + a plain unit sentence ("Bar length measures the average size
+     of each feature's push on the predicted (log) price per acre… not
+     a bigger share of the price").  i18n (en + sw), plural-safe
+     templates for 1 / 2 / 3+ drivers.
+
+149. **P6b — one-estimate mode is real RESOLVED (G).**
+     [architecture-decision] The dead placeholder (and its false
+     Deal-Finder promise) is replaced by a sessionStorage-backed
+     last-estimate store (`src/lib/store/lastEstimate.ts`,
+     useSyncExternalStore, try/catch around every storage access,
+     cleared when the browser session ends).  The Predictor's mutation
+     onSuccess saves the request + response + place name + timestamp;
+     the mode renders DriversList (moved from features/predictor to
+     src/components — a shared edit) + the live coverage block from the
+     stored response's `explanation.coverage`; header = place name /
+     size / property type / estimate time (all from the stored
+     request/response).  Empty store -> honest empty state with a "Run
+     an estimate" action to the Predictor.  DECISION FOR THE PERSON:
+     if per-listing SHAP for arbitrary Deal-Finder listings is wanted,
+     that needs a NEW backend route (see #158) — the store only replays
+     the last /predict estimate.
+
+150. **P6b — typical-price footer explained RESOLVED (H).**  The footer
+     now says what the number IS ("Typical starting price per acre —
+     the baseline the drivers push up or down from — is X."), hidden
+     when `typical_price_per_acre_ksh` is null, formatted with the
+     currency-aware formatter (verified: KSh 2,673,441 -> $20,724 with
+     the /meta fx rate).  The backend computes it at load time from the
+     explanation service's member base values (exp(sum w_m*base_m) —
+     the same baseline /predict reports); null when unavailable.
+
+151. **P6b — glossary limited to the model's features RESOLVED (I).**
+     feature_labels.json carries the full Phase-3 catalogue (incl.
+     in_production_set=false entries such as geocode_confidence); the
+     panel now lists only features present in shap_global (the rows the
+     bars chart) with the count interpolated ("The 8 features the model
+     uses…").  Verified with a 9-label mock rendering 8.
+
+152. **P6b — chart hexes tokenised RESOLVED (J).**  #e8742a / #6a5b56 /
+     #574238 no longer appear in the feature; they live once in
+     `src/lib/ui/chart-tokens.ts` (documented mirrors of the tailwind
+     tokens) with `chartColorForFamily(family)` for member colours.
+     Forbidden-literal grep of explainability/ is clean (matches only
+     inside __tests__ mocks).
+
+153. **P6b — i18n (K) RESOLVED.**  Every Explainability string
+     (subtitle, captions, states, a11y labels, one-estimate mode) is in
+     i18n en + sw (~45 new keys).  Kiswahili is machine-aided and NEEDS
+     NATIVE REVIEW (same caveat as the P2b-P5b rounds; technical terms
+     — SHAP, ensemble member names, log price — deliberately stay in
+     English per the i18n header note).  Verified: sw locale renders.
+
+154. **P6b — a11y.**  Mode toggle is a real segmented control
+     (role=radiogroup + radios + ArrowLeft/ArrowRight); model selector
+     is a radiogroup; both charts have accessible names (role=img +
+     aria-label) plus sr-only value summaries (top features with
+     values; coverage shares); colour is never the only encoding
+     (legend labels + visible bar value labels; slice names + pcts).
+
+155. **P6b — feature_importance unused (L) — suggestion, not built.**
+     The backend still serves native + permutation importances for all
+     three models; the design shows no such card, so nothing was built.
+     Suggestion: a "feature importance (all models)" card or a
+     comparison view if a design lands.
+
+156. **P6b — backend additions.**  /model/explainability is additive:
+     `models` / `default_model` / normalised `ensemble_shap_coverage`
+     (with source) / `typical_price_per_acre_ksh` /
+     `combined_base_value`; 13 new tests (test_model_p6b.py: both
+     source paths, weight ordering, sum-in-tolerance, manifest percent
+     normalisation, invalid-share null (never clamped), tabnet-only
+     degenerate case, typical-price from the explanation service +
+     failure -> null, 503 unchanged); docs/api.md + OpenAPI snapshot
+     regenerated.  Backend: 300 passed / 1 skipped, ruff clean.
+
+157. **P6b — render verification.**  Playwright at 1440 + 390 against
+     the mocked API shaped from the REAL schemas (local Outfit +
+     Material Symbols woff2 — agent-browser init scripts run at
+     document-start where documentElement can be null; the font/style
+     injection is now defensive or the whole init script silently
+     aborts).  Captures: default, model selected, manifest vs
+     recomputed, shares-invalid, error, empty, single-model (selector
+     hidden), one-estimate with/without stored estimate, USD toggle,
+     sw locale; mobile scrollWidth = 390 = innerWidth on every mobile
+     capture.  The bars' unit sentence is a wrapping paragraph (an
+     inside-SVG axis label clipped at 390px).  Frontend: typecheck +
+     lint + build + 98 tests (19 new) pass.
+
+158. **P6b — decisions for the person (numbered).**
+     1. Should one-estimate mode eventually become a real per-listing
+        SHAP endpoint (POST /listings/{listing_no}/explain)?  The store
+        only replays the last /predict estimate; Deal-Finder listings
+        have no per-listing SHAP (would need a new route + compute
+        budget).
+     2. Wording review of the plain explanations ("what moves the
+        estimate most", "typical starting price per acre") — plain
+        language for non-technical buyers, please sanity-check.
+     3. Kiswahili native review (all sw keys added since P2b).
+     4. The manifest-coverage fallback wording assumes a training-time
+        report; confirm the manifest's ensemble_shap_coverage semantics
+        against a real artifacts/ run (only synthetic manifests exist
+        in this environment).
+
+## P7b — Data Explorer: no hard-coded values, honest tabs, sourced thresholds (2026-11-18)
+
+159. **P7b — threshold honesty (A) RESOLVED.**  `?? 10` is gone:
+     the min-county listing threshold now comes from /meta's coverage
+     block only, and when it is null the threshold badge, the
+     threshold divider, the "Model Ready / Not enough data" statuses,
+     and the ready/not-ready county split all disappear, replaced by
+     "Threshold not available" captions (county table + coverage tile +
+     listings-per-county subtitle).  The matching backend fix for
+     /counties/summary was already landed by P3b
+     (`min_county_n_from_manifest` returns null); /meta's inner
+     `.get("COVERAGE_MIN_COUNTY_N", 10)` default remains OPEN (the
+     documented B0-era allowlist item) — it only fires when
+     coverage_rules.json exists but lacks the key.
+
+160. **P7b — missing-severity threshold removed (B, option 2).**
+     SEVERE_MISSING_PCT=50 (which features got the orange "severe"
+     accent) was a typed data threshold with no configured backend
+     notion of "too much missing", so the severity STYLING was removed
+     (the brief's option 2): every row renders in the same plain style,
+     the percentage stays `missing_pct` unmodified, sorting stays
+     missing-desc, and the "excluded from the primary ensemble models"
+     marker still comes from `in_selected_set`.  If the person wants a
+     severity accent back, add a configured `missing_severe_pct` to
+     /meta first (decision #6 below).
+
+161. **P7b — tabs + honest placeholder (C) RESOLVED.**  Tab labels
+     render from i18n (`de.tab.*`, en + sw).  The four undesigned tabs
+     (Prices / Locations / Relationships / Table) render DISABLED,
+     non-interactive-looking pills that stay reachable via `?tab=`,
+     with a translated placeholder that names the data that would
+     power each one.  The tab group is a proper tablist (role=tab,
+     aria-selected, roving tabindex + arrow keys on enabled tabs).
+
+162. **P7b — [architecture-decision] the four undesigned tabs (C).**
+     Do NOT build them without designs.  What each would need:
+     1. Prices — a new prices-by-group endpoint (per property type +
+        size band; nothing serves group aggregates today; the closest
+        existing data is /overview/summary's by_property_type /
+        by_size_band blocks, which the Overview already renders).
+     2. Locations — new location endpoints (map layers / place-level
+        aggregates; /counties/boundaries + /places/search exist but
+        serve no price-per-location aggregates).
+     3. Relationships — a sampled scatter endpoint (unbiased, seeded,
+        like /counties/{county}/distance-profile's sample — never
+        first-N of the underpriced-sorted frame).
+     4. Table — the RAW pre-cleaning dataset (the design implies
+        ~1,094 rows) is NOT served anywhere; only the cleaned
+        modelling frame is.  Exposing it means serving the raw scrape
+        + row-count honesty ("usable listings" vs "raw listings" from
+        the manifest — the raw count is not recorded in any artifact
+        the backend loads).
+
+163. **P7b — colour tokens + ramp constants (D) RESOLVED.**  The
+     histogram ramp hexes (#dec1b3 / #ffb68f / #e8742a / #9d4400 /
+     #8a7266) are single-sourced in `lib/ui/chart-tokens.ts`
+     (CHART_COLOR_RAMP_* / CHART_COLOR_OUTLINE, each naming the
+     tailwind token it mirrors) and the hatch gradients reference the
+     tokens.  The ramp cut-offs live once in PRICE_RAMP_CUTOFFS with a
+     "presentation constants, not data facts" comment.
+
+164. **P7b — clamps kept as visual minimums only (E) RESOLVED.**
+     Percentile markers use the response values (log10 position from
+     the bin edges).  The three width clamps (bar 1.5% / divider 2% /
+     missing-bar 2% minimums) are commented as VISUAL MINIMUMS; each
+     row's count is printed as text so a clamp can never make a
+     below-threshold county look bigger than its count.
+
+165. **P7b — locale + currency (F) RESOLVED.**  `toLocaleString('en-KE')`
+     call-sites were replaced by the `useFormatNumber()` locale helper
+     (en-KE / sw-KE — one stray literal in Model Performance was swept
+     too).  `compactKSh` (which ignored the KSh/USD toggle) was removed
+     in favour of the shared currency-aware `formatCompactMoney`
+     (format.ts, listed as a shared edit); the page subscribes via
+     `useCurrency()` so a toggle/rate arrival re-renders the money.
+
+166. **P7b — copy i18n + flag rule (G) RESOLVED.**  Every Data Explorer
+     string is in i18n (en + sw, ~60 new `de.*` keys; sw is
+     machine-aided and NEEDS NATIVE REVIEW).  The sanitization tile
+     explains the flag from the response's `flag_definition`
+     ("1st–99th percentile window" — ordinal-suffixed in code, numbers
+     from the backend), never a typed "1st-99th".  "N = usable" and
+     the flagged counts interpolate the real numbers.
+
+167. **P7b — counts (H) RESOLVED.**  The County Coverage tile shows
+     "of N counties" from /counties/summary's `n_counties_total`
+     (boundaries response) — never a typed 47.  (About's "of 47" had
+     the same fix, see #171.)
+
+168. **P7b — missing-values card (I) verified.**  Sorting is
+     missing_pct desc; the excluded marker comes from
+     `in_selected_set`; feature names come from feature_labels (with
+     the raw key as fallback); the percentage is `missing_pct`
+     unmodified.  No change needed beyond (B)'s severity removal.
+
+169. **P7b — CSV download (J) RESOLVED.**  BOM for Excel, RFC-4180
+     quoted+escaped county names, plain locale-independent numbers,
+     blank cells for null medians / unknown model_ready, and the
+     filename carries the dataset date from /meta (never a typed
+     date).  Unit-tested (header, escaping, numbers, honest blanks).
+
+170. **P7b — states + a11y (K, L) RESOLVED.**  Every card has
+     loading / error+retry / empty states and one query failing leaves
+     the rest rendered (verified by test + render).  The tablist has
+     roving tabindex + arrow keys; the county bars and the county
+     table have sr-only text alternatives (county, count, status);
+     the histogram has an sr-only summary (n, median, p10–p90);
+     colour is never the only encoding (counts are printed text).
+     Mobile scrollWidth = 390 = innerWidth on every mobile capture.
+
+## P8b — About + Settings: data-driven copy, real options, FX from the backend (2026-11-18)
+
+171. **P8b — About pipeline copy from APIs (A) RESOLVED.**  The
+     pipeline steps render from the /meta `methodology` block
+     (sources_note, cleaning_steps, feature_groups — one backend copy
+     in `app/schemas/canonical.py`, every claim verifiable in the
+     repo), the model names from /model/metrics `model_info`
+     (tree+neural families; honest fallback copy when absent), and the
+     interval level from `default_interval_level`.  UNVERIFIABLE
+     claims were REMOVED, not templated: "duplicate listings" and
+     "mismatched coordinates" exist only in the notebook's ETL, which
+     is not part of this repo — the About page no longer states them.
+
+172. **P8b — FAQ templated (B) RESOLVED.**  Reliability interpolates
+     MedAPE (one decimal), the interval level, and the coverage at that
+     level; the refusal answer interpolates the /meta thresholds and
+     its fallback states no numbers; the anomalies answer interpolates
+     `flag_definition`; the data-sources answer is the methodology
+     sources_note.  No typed "80%" or "1st-99th" remains.
+
+173. **P8b — glossary term unified (C) RESOLVED.**  "MdAPE" is gone;
+     the app-wide term is "MedAPE" via i18n (`about.glossary.medape`
+     matches model.methodLine's usage).  Glossary entries + the
+     feature list render from i18n + feature_labels.
+
+174. **P8b — About footer stats (D) RESOLVED.**  All four live-system
+     stats come from the APIs (coverage at the response level, MedAPE,
+     scored parcels, counties); "Counties Covered" shows "N of TOTAL"
+     with TOTAL from /counties/summary `n_counties_total` — the typed
+     47 is gone.  Each stat shows "not available" when null.
+
+175. **P8b — health states (E) RESOLVED.**  Four distinct states:
+     loading ("Checking system status…"), ok ("Live System Active"),
+     degraded ("System degraded"), unreachable ("System status
+     unavailable" + a note when the health query errors).  The old
+     `status === undefined → degraded` bug (a failed query shown as
+     degraded) is fixed.
+
+176. **P8b — report-a-listing destination (F) still open, by design.**
+     The mailto button renders only when VITE_REPORT_EMAIL is set (no
+     address invented).  Where reports should go is the person's
+     decision (email vs a backend /reports endpoint with storage —
+     [architecture-decision]; see decision #5 below).
+
+177. **P8b — FX rate from the backend (I) RESOLVED (supersedes the
+     O3 sweep's shape).**  No default rate exists in code:
+     `fx` is null until FX_KSH_PER_USD is set (FX_AS_OF / FX_SOURCE
+     optional), served as {ksh_per_usd, as_of, source}.  The frontend
+     currency module keeps a subscribe/getSnapshot store +
+     `useCurrency()` (useSyncExternalStore) so every consumer
+     re-renders when the rate arrives or the currency changes; with no
+     rate the USD pill is disabled with a tooltip and a stored USD
+     preference renders as KSh (display-level only — the preference
+     is kept).  The Settings note is built from the response
+     ("1 USD = X KSh (source) — as of D") and says fixed vs live via
+     `source`.  The O3-era FxBlock fields
+     (ksh_to_usd_rate/usd_to_ksh_rate/is_live) and the 129 default were
+     REMOVED — they were part of this same unreleased delivery stream
+     (decision #1 below).
+
+178. **P8b — safe storage (J) RESOLVED.**  One `lib/storage.ts` helper
+     (try/catch + in-memory fallback when localStorage throws);
+     currency, language, and the default county all read/write through
+     it.  A throwing localStorage no longer crashes the i18n init, the
+     currency store, or Settings (test-covered).  No direct
+     localStorage call remains outside the helper.
+
+179. **P8b — default-county hook (K) RESOLVED.**  `lib/county-preference.ts`
+     exposes getStoredDefaultCounty / setStoredDefaultCounty /
+     `useDefaultCounty()` (validates against the live /counties/row_counts
+     list).  Settings clears a stale stored county back to "All
+     counties" with a notice (never a blank select); the Overview
+     reads the stored default through the safe accessor (its existing
+     initial-filter consumption).  Deal Finder / Market Insights
+     wiring is deliberately NOT done — their county controls are
+     exploratory pickers, not persistent filters; changing what those
+     pages show by default is a product decision (#7 below).
+
+180. **P8b — language options (L) RESOLVED.**  Settings builds the
+     options from the registered i18n resources (Object.keys of
+     resourceStore.data) with native names via Intl.DisplayNames —
+     never a typed list.  No "Reset to defaults" action (the design
+     shows none).
+
+181. **P8b — shell (M) RESOLVED.**  The version text follows /meta's
+     model_version (hidden when null — no typed "v2.4"); the permanent
+     notification-dot decoration on the rail Notifications button is
+     REMOVED (the mobile header dot had already gone in O2).  "Terra
+     Intelligence Engine" stays as branding.
+
+182. **P8b — backend additions + checks.**  /meta is additive:
+     `fx` (nullable, no default) / `flag_definition` /
+     `methodology`; env vars FX_KSH_PER_USD / FX_AS_OF / FX_SOURCE
+     documented in .env.example + docs/api.md.  Tests: test_meta_fx.py
+     rewritten (null when unset, follows env, as_of/source null when
+     unset, other /meta fields unchanged), test_meta_p8b.py new
+     (flag_definition + methodology from the canonical constants,
+     no-unverifiable-claims guard, no NaN/inf), test_data_explorer.py
+     extended (flag_definition in happy + degenerate paths).  Backend:
+     307 passed / 1 skipped, ruff check + format clean.  Frontend:
+     typecheck + lint + build + 135 tests (37 new) pass.  OpenAPI
+     snapshot regenerated; scripts/check-hardcoded.sh clean.
+
+183. **P8b — render verification.**  Playwright at 1440 + 390 against
+     the mocked API shaped from the REAL schemas (20 captures in
+     work/screenshots/p78-final/): Data Explorer default /
+     no-threshold / ?tab=prices / price-distribution-error /
+     feature-evaluation-error / alternate values / USD toggle / sw;
+     About default / alternate values / degraded / unreachable;
+     Settings default / fx-null / stale-county; mobile (scrollWidth =
+     390 = innerWidth on every mobile capture).  Text-level
+     assertions verified the threshold, flag-window, MedAPE, level,
+     model-list, rate-note, USD-disabled, and stale-county copy all
+     follow the mock — changing the mock changed the text.
+
+184. **P8b — decisions for the person (numbered).**
+     1. FX block reshape: the O3-era fields (ksh_to_usd_rate /
+        usd_to_ksh_rate / is_live + the 129 default + the
+        KSH_TO_USD_RATE env name) were REPLACED by the P8b shape
+        (ksh_per_usd / as_of / source + FX_* env names + null
+        default).  Both sides + tests + mocks were updated together;
+        if any deployment already set KSH_TO_USD_RATE, re-set it as
+        FX_KSH_PER_USD.
+     2. Live FX feed: still an [architecture-decision] — the rate is
+        operator-maintained and read at startup.
+     3. Report-a-listing destination (email vs backend /reports
+        endpoint with storage) — [architecture-decision].
+     4. /meta's inner coverage-rule defaults (`.get(key, 10)` etc.)
+        remain the documented B0-era OPEN allowlist item — confirm
+        coverage_rules.json always carries the keys in production.
+     5. A severity accent for the missing-values card requires a
+        backend-configured `missing_severe_pct` first (the typed 50%
+        was removed, not faked).
+     6. Kiswahili native review (all sw keys added since P2b,
+        including the ~100 new de.*/about.*/settings.* keys).
+     7. Wire `useDefaultCounty()` into Deal Finder / Market Insights
+        if you want the default county to shape those pages' initial
+        view too (product decision).
+     8. The four undesigned Data Explorer tabs (#162) — each needs a
+        design + its own endpoint decision before building.

@@ -11,6 +11,9 @@ histogram client-side — the backend already holds the whole frame in
 memory and the summary is a handful of vectorised pandas calls.  It adds
 no new state and writes nothing.
 
+``flag_definition`` (P7b) serves the flagged-listing percentile window
+from the canonical constants so the UI never re-types "1st–99th".
+
 The raw pre-cleaning "observed corpus" count is deliberately NOT exposed:
 that number does not exist anywhere the backend loads (the parquet holds
 only the usable modelling rows), so the frontend marks that tile
@@ -22,7 +25,9 @@ from __future__ import annotations
 import numpy as np
 from fastapi import APIRouter, Request
 
+from app.schemas.canonical import FLAG_LOWER_PCT, FLAG_UPPER_PCT
 from app.schemas.data_explorer import (
+    FlagDefinition,
     PriceBin,
     PriceDistributionResponse,
     PricePercentiles,
@@ -38,7 +43,13 @@ N_BINS = 24
 
 @router.get("/data/price-distribution", response_model=PriceDistributionResponse)
 async def price_distribution(request: Request) -> PriceDistributionResponse:
-    """Log-scale price histogram + percentiles over the usable listings."""
+    """Log-scale price histogram + percentiles over the usable listings.
+
+    ``flag_definition`` (P7b) carries the flagged-listing rule (the
+    percentile window from the canonical constants) so the frontend can
+    explain what "flagged as possible errors" means without typing
+    "1st–99th".
+    """
     app_exports = request.app.state.app_exports
     df = app_exports.require("listings_scored_df", "listings_scored.parquet")
 
@@ -49,6 +60,8 @@ async def price_distribution(request: Request) -> PriceDistributionResponse:
     n_flagged = int(df["data_quality_flag"].fillna(False).astype(bool).sum())
     n_usable = int(len(usable))
 
+    flag_definition = FlagDefinition(lower_pct=FLAG_LOWER_PCT, upper_pct=FLAG_UPPER_PCT)
+
     if n_usable == 0:
         # Degenerate but honest: an empty histogram rather than a 503 — the
         # file loaded, it simply has no usable prices.
@@ -58,6 +71,7 @@ async def price_distribution(request: Request) -> PriceDistributionResponse:
             percentiles=PricePercentiles(p1=0.0, p10=0.0, p50=0.0, p90=0.0, p99=0.0),
             n_usable=0,
             n_flagged=n_flagged,
+            flag_definition=flag_definition,
         )
 
     pct = np.percentile(usable, [1, 10, 50, 90, 99])
@@ -92,4 +106,5 @@ async def price_distribution(request: Request) -> PriceDistributionResponse:
         percentiles=PricePercentiles(p1=p1, p10=p10, p50=p50, p90=p90, p99=p99),
         n_usable=n_usable,
         n_flagged=n_flagged,
+        flag_definition=flag_definition,
     )

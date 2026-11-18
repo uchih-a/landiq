@@ -1,22 +1,20 @@
 /**
- * CoverageBars — the F7 "Do ranges hold?" card.
+ * CoverageBars — the "Do ranges hold?" card (P5b real-data round).
  *
- * Three horizontal bars showing target vs actual conformal coverage at
- * the 50%, 80%, and 90% levels. Each bar fills to the actual coverage
- * value (from the `weighted_ensemble` row's `interval_coverage_50/80/90`
- * fields) and carries a vertical tick marking the target level so the
- * viewer can see at a glance whether the ranges are over- or
- * under-covering.
- *
- * Coverage values are expected as fractions (0..1). If the backend ever
- * ships 0..100 values, the bars would overflow — revisit then.
+ * Fix D: the nominal levels (0.5 / 0.8 / 0.9) and the labels ("50%
+ * range" etc.) are NO LONGER typed — they come from the response's
+ * `interval_levels` (backend-derived from the artifact's
+ * interval_coverage_weighted_ensemble entries or the ensemble row's
+ * populated coverage columns).  The bars build from
+ * `coverageEntriesFor(metrics)`; no fixed target array remains.
  */
+import { useTranslation } from 'react-i18next';
 import { ValuationCard } from '@/components/ValuationCard';
 import { EmptyState } from '@/components/EmptyState';
 import { LoadingSkeleton } from '@/components/LoadingSkeleton';
-import type { MetricsResponse, MetricsTableRow } from '@/lib/api/types';
+import type { MetricsResponse } from '@/lib/api/types';
 
-import { pickEnsembleRow } from './metrics-helpers';
+import { coverageEntriesFor } from './metrics-helpers';
 
 interface Props {
   metrics: MetricsResponse | undefined;
@@ -25,22 +23,9 @@ interface Props {
   onRetry: () => void;
 }
 
-interface CoverageBar {
-  level: string;
-  target: number;
-  actual: number | null;
-}
-
-function buildBars(row: MetricsTableRow | undefined): CoverageBar[] {
-  if (!row) return [];
-  return [
-    { level: '50% range', target: 0.5, actual: row.interval_coverage_50 ?? null },
-    { level: '80% range', target: 0.8, actual: row.interval_coverage_80 ?? null },
-    { level: '90% range', target: 0.9, actual: row.interval_coverage_90 ?? null },
-  ];
-}
-
 export function CoverageBars({ metrics, isLoading, isError, onRetry }: Props) {
+  const { t } = useTranslation();
+
   if (isLoading) {
     return (
       <ValuationCard noPadding>
@@ -54,22 +39,21 @@ export function CoverageBars({ metrics, isLoading, isError, onRetry }: Props) {
     return (
       <EmptyState
         icon="cloud_off"
-        title="Couldn't load coverage"
-        message="The model metrics feed is unavailable."
-        actionLabel="Retry"
+        title={t('common.dataUnavailable')}
+        message={t('model.coverageLoadFailed')}
+        actionLabel={t('common.retry')}
         onAction={onRetry}
       />
     );
   }
 
-  const row = pickEnsembleRow(metrics);
-  const bars = buildBars(row);
-  if (bars.every((b) => b.actual == null)) {
+  const entries = coverageEntriesFor(metrics);
+  if (entries.length === 0 || entries.every((e) => e.actual == null)) {
     return (
       <EmptyState
         icon="tune"
-        title="No coverage data"
-        message="Interval coverage fields are not present on the ensemble row."
+        title={t('model.noCoverageTitle')}
+        message={t('model.noCoverageMessage')}
       />
     );
   }
@@ -78,26 +62,52 @@ export function CoverageBars({ metrics, isLoading, isError, onRetry }: Props) {
     <ValuationCard noPadding>
       <div className="p-space-lg">
         <h2 className="font-headline-section text-headline-section text-on-surface">
-          Do ranges hold?
+          {t('model.doRangesHold')}
         </h2>
         <p className="text-caption-sm text-on-surface-variant mt-1">
-          Target conformal coverage vs the share of test listings whose actual price landed inside the predicted range.
+          {t('model.doRangesHoldSubtitle')}
         </p>
+
+        {/* Visually hidden table with target vs actual (a11y — the target
+            tick is not the only carrier of the information). */}
+        <div className="sr-only">
+        <table>
+          <caption>{t('model.doRangesHold')}</caption>
+          <thead>
+            <tr>
+              <th>{t('model.colRange')}</th>
+              <th>{t('model.colTarget')}</th>
+              <th>{t('model.colActual')}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {entries.map((e) => (
+              <tr key={e.level}>
+                <td>{t('model.rangeLabel', { pct: e.targetPct })}</td>
+                <td>{e.targetPct}%</td>
+                <td>{e.actual != null ? `${(e.actual * 100).toFixed(1)}%` : '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        </div>
+
         <div className="mt-space-md flex flex-col gap-4">
-          {bars.map((b) => {
-            const actualPct =
-              b.actual != null ? Math.round(b.actual * 100) : null;
-            const targetPct = Math.round(b.target * 100);
+          {entries.map((e) => {
+            const actualPct = e.actual != null ? Math.round(e.actual * 100) : null;
             const barWidth = actualPct != null ? Math.min(100, actualPct) : 0;
             return (
-              <div key={b.level} className="flex flex-col gap-1">
+              <div key={e.level} className="flex flex-col gap-1">
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-body-regular text-on-surface">
-                    {b.level}
+                    {/* Level label templated from the response's level. */}
+                    {t('model.rangeLabel', { pct: e.targetPct })}
                   </span>
                   <span className="text-label-metric font-label-metric text-on-surface-variant tabular-nums">
                     {actualPct != null ? `${actualPct}%` : '—'}{' '}
-                    <span className="text-secondary">/ target {targetPct}%</span>
+                    <span className="text-secondary">
+                      {t('model.targetSuffix', { pct: e.targetPct })}
+                    </span>
                   </span>
                 </div>
                 <div className="relative h-3 w-full rounded-full bg-surface-container-highest">
@@ -106,12 +116,12 @@ export function CoverageBars({ metrics, isLoading, isError, onRetry }: Props) {
                     style={{ width: `${barWidth}%` }}
                     role="presentation"
                   />
-                  {/* Target marker — vertical tick at the target % across the track. */}
+                  {/* Target tick. */}
                   <div
                     className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-0.5 h-4 bg-on-surface"
-                    style={{ left: `${targetPct}%` }}
-                    title={`Target: ${targetPct}%`}
-                    aria-label={`Target ${targetPct}%`}
+                    style={{ left: `${e.targetPct}%` }}
+                    title={t('model.targetTitle', { pct: e.targetPct })}
+                    aria-label={t('model.targetA11y', { pct: e.targetPct })}
                   />
                 </div>
               </div>

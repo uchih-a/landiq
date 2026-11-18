@@ -1,77 +1,32 @@
 /**
- * Pure helpers and constants for the Predictor screen.
+ * Pure helpers for the Predictor screen (P2b real-data wiring round).
  *
- * Kept in a non-component module so the react-refresh `only-export-components`
- * rule doesn't fire on the constants/types/functions (mirrors Overview's
- * `overview-helpers.ts` pattern).
+ * Removed in P2b (now backend-owned by /predict/options):
+ *   - `PARCEL_FEATURE_KEYS` — the response's `parcel_features` list owns
+ *     this.  The frontend iterates the response.
+ *   - `PARCEL_FEATURE_LABELS` — labels stay in i18n, keyed by the
+ *     backend's key names (`predictor.feature.borehole` etc.).
+ *   - `PROP_TYPE_OPTIONS` — the response's `property_types` list owns
+ *     this.
+ *   - `TITLE_DOC_KEY` — the title-document input is removed entirely
+ *     from the unsupported state (it was frontend-only, never wired to
+ *     the backend, and collected data that was discarded).
  *
- * Contents:
- *  - `PARCEL_FEATURE_KEYS` / `PARCEL_FEATURE_LABELS` — the ten infrastructure
- *    checklist items. Names match `scoring_params.json:infra_items` and B1's
- *    `InfrastructureCalculator` exactly (see backend
- *    `app/schemas/predict.py:PARCEL_CHECKLIST_FIELDS`).
- *  - `PROP_TYPE_OPTIONS` — common Kenyan listing property types.
- *  - `TriState` / `triStateToChecklist` / `initialChecklist` — the form-side
- *    Yes/No/Not-Sure state and its conversion to the backend's
- *    `ChecklistValue = boolean | 'not_sure' | null`.
- *  - `TITLE_DOC_KEY` — sentinel for the frontend-only title-docs field.
- *
- * NOTE: Title Documentation is a frontend-only field not yet wired to the
- * backend. The PredictRequest schema only accepts lat, lon, size_acres,
- * prop_type, parcel_features, confidence_level — there is no slot for it.
+ * Kept:
+ *   - `TriState` / `triStateToChecklist` / `initialChecklist` — the
+ *     form-side Yes/No/Not-Sure state and its conversion to the
+ *     backend's `ChecklistValue`.  `initialChecklist` now takes the
+ *     key list as an argument (so it doesn't re-type the keys).
+ *   - `deriveResultState` — the reliable / limited / unsupported
+ *     switch, driven entirely by the response's coverage block.
+ *   - `validateSizeAcres` — pure validation helper that takes the
+ *     bounds from the options response.
  */
 
 import type { ChecklistValue } from '@/lib/api/types';
 
 /** The form's three-state value for each checklist item. */
 export type TriState = 'yes' | 'no' | 'unsure';
-
-/** The ten infrastructure checklist items — same names as the backend. */
-export const PARCEL_FEATURE_KEYS = [
-  'borehole',
-  'piped_water',
-  'river_water',
-  'water_tank',
-  'grid_electric',
-  'solar_electric',
-  'full_fence',
-  'partial_fence',
-  'structures',
-  'internal_road',
-] as const;
-
-export type ParcelFeatureKey = (typeof PARCEL_FEATURE_KEYS)[number];
-
-/** Human-readable labels for each parcel feature. */
-export const PARCEL_FEATURE_LABELS: Record<ParcelFeatureKey, string> = {
-  borehole: 'Borehole',
-  piped_water: 'Piped water',
-  river_water: 'River / stream water',
-  water_tank: 'Water tank',
-  grid_electric: 'Grid electricity',
-  solar_electric: 'Solar electricity',
-  full_fence: 'Full perimeter fence',
-  partial_fence: 'Partial fence',
-  structures: 'Structures on site',
-  internal_road: 'Internal access road',
-};
-
-/** Common Kenyan listing property types offered as pills on Step 2. */
-export const PROP_TYPE_OPTIONS: { value: string; label: string }[] = [
-  { value: 'Land', label: 'Land' },
-  { value: 'Farm', label: 'Farm' },
-  { value: 'Residential', label: 'Residential' },
-  { value: 'Commercial', label: 'Commercial' },
-  { value: 'Industrial', label: 'Industrial' },
-  { value: 'Plot', label: 'Plot' },
-];
-
-/**
- * Sentinel key for the Title Documentation field. Frontend-only — never
- * included in the PredictRequest body (the schema rejects unknown keys via
- * `_check_keys` validator in `app/schemas/predict.py`).
- */
-export const TITLE_DOC_KEY = 'title_documentation';
 
 /** Map the form's TriState to the backend's ChecklistValue. */
 export function triStateToChecklist(v: TriState): ChecklistValue {
@@ -80,11 +35,13 @@ export function triStateToChecklist(v: TriState): ChecklistValue {
   return 'not_sure';
 }
 
-/** Build the initial checklist state with every item set to "Not Sure". */
-export function initialChecklist(): Record<ParcelFeatureKey, TriState> {
-  return Object.fromEntries(
-    PARCEL_FEATURE_KEYS.map((k) => [k, 'unsure' as TriState]),
-  ) as Record<ParcelFeatureKey, TriState>;
+/**
+ * Build the initial checklist state with every item set to "Not Sure".
+ * Takes the key list as an argument (from the options response) so the
+ * helper doesn't re-type the keys.
+ */
+export function initialChecklist(keys: string[]): Record<string, TriState> {
+  return Object.fromEntries(keys.map((k) => [k, 'unsure' as TriState]));
 }
 
 /**
@@ -98,12 +55,7 @@ export function initialChecklist(): Record<ParcelFeatureKey, TriState> {
  *                   (no listings within the search radius — can't produce a
  *                   meaningful estimate, e.g. "none within 30 km")
  *
- * G2 fix: the previous logic checked `county_listings === 0` for unsupported,
- * but the design's 04_unsupported state has county_listings = 2 (below the
- * min_county_n threshold of 10, but not zero). The correct trigger is
- * nearby_listings === 0 — when there are ZERO listings near the point, the
- * estimate is meaningless. When there are SOME nearby listings (even if
- * below min_nearby_n), the estimate is "limited" but usable.
+ * Driven ENTIRELY by the response's coverage block — no typed thresholds.
  */
 export type ResultState = 'reliable' | 'limited' | 'unsupported';
 
@@ -113,8 +65,42 @@ export function deriveResultState(coverage: {
   nearby_listings: number;
 }): ResultState {
   if (!coverage.is_low_support) return 'reliable';
-  // If there are SOME nearby listings, the estimate is usable (limited).
-  // If nearby_listings is 0, we can't produce a meaningful estimate.
   if (coverage.nearby_listings > 0) return 'limited';
   return 'unsupported';
+}
+
+/**
+ * Validation result for the parcel-size input.  The bounds come from
+ * the options response (`size_acres.min` / `size_acres.max`); the
+ * helper is pure so it can be unit-tested without HTTP.
+ */
+export type SizeValidation =
+  | { ok: true; value: number }
+  | { ok: false; reason: 'empty' | 'not-a-number' | 'nonpositive' | 'below-min' | 'above-max'; min?: number; max?: number };
+
+/**
+ * Validate the size input string against the bounds from /predict/options.
+ *
+ *  - empty string               → { ok: false, reason: 'empty' }
+ *  - non-numeric                → { ok: false, reason: 'not-a-number' }
+ *  - <= 0                       → { ok: false, reason: 'nonpositive' }
+ *  - < min (the 1st percentile) → { ok: false, reason: 'below-min', min }
+ *  - > max (the 99th percentile)→ { ok: false, reason: 'above-max', max }
+ *  - otherwise                  → { ok: true, value }
+ *
+ * The min/max bounds are passed in (not imported) so the helper has no
+ * hidden constants.
+ */
+export function validateSizeAcres(
+  raw: string,
+  bounds: { min: number; max: number },
+): SizeValidation {
+  const trimmed = raw.trim();
+  if (trimmed === '') return { ok: false, reason: 'empty' };
+  const n = Number(trimmed);
+  if (!Number.isFinite(n)) return { ok: false, reason: 'not-a-number' };
+  if (n <= 0) return { ok: false, reason: 'nonpositive' };
+  if (n < bounds.min) return { ok: false, reason: 'below-min', min: bounds.min };
+  if (n > bounds.max) return { ok: false, reason: 'above-max', max: bounds.max };
+  return { ok: true, value: n };
 }

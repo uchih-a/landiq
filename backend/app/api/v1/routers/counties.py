@@ -36,52 +36,304 @@ from app.schemas.app_exports import (
     CountySummaryRow,
     PaginationMeta,
 )
+from app.schemas.canonical import PROPERTY_TYPES
 from app.schemas.counties import (
+    CountyDistanceProfileResponse,
     CountyListingScatterRow,
     CountyListingsResponse,
     CountyRowCount,
     CountyRowCountsResponse,
+    DistanceProfilePoint,
+    DistanceProfileTrend,
+    PriceBandEdge,
 )
+from app.services.county_summary import (
+    canonical_prop_type_or_none,
+    compute_price_bands,
+    compute_property_type_counts,
+    count_unmapped_prop_types,
+    min_county_n_from_manifest,
+    summarize_frame_by_county,
+)
+from app.services.geo_reference import compute_distances_to_nairobi
+from app.services.overview import _SCATTER_SEED, _trend_block
 
 router = APIRouter(tags=["market-insights"])
 logger = get_logger("app.counties")
 
-# Nairobi CBD reference point — same as B1's scoring_params.json:nairobi_reference_point
-# (lat -1.2921, lon 36.8219).  Using the same point keeps the recomputed
-# dist_to_nairobi_km consistent with the model's dist_to_nairobi_km feature.
-NAIROBI_LAT = -1.2921
-NAIROBI_LON = 36.8219
+# Number of colour bands the choropleth legend renders (matches the
+# five-step orange scale in the design).  UI/display constant — the band
+# EDGES themselves are computed from the data (see county_summary).
+N_PRICE_BANDS = 5
 
 
 @router.get("/counties/summary", response_model=CountySummaryResponse)
-async def county_summary(request: Request) -> CountySummaryResponse:
-    """One row per county, sorted by listing count descending (Cell 9.5).
+async def county_summary(
+    request: Request,
+    prop_type: str | None = Query(
+        None,
+        description=(
+            "Case-insensitive EXACT match against one of the canonical "
+            "property types (Land, Farm, Commercial).  Unknown -> 422 "
+            "with `allowed`.  When set, per-county aggregates are computed "
+            "on the filtered rows of listings_scored.parquet."
+        ),
+    ),
+) -> CountySummaryResponse:
+    """One row per county (optionally filtered by prop_type), plus the
+    canonical property-type list, data-driven price bands, and the
+    min_county_n threshold from the artifact config.
 
-    **This is the single source of truth for medians / IQR** — the per-listing
-    endpoint does NOT recompute them, to avoid two sources of truth drifting apart.
+    **Filtering:** when ``prop_type`` is set, the per-county aggregates
+    are recomputed from the filtered ``listings_scored`` frame (the
+    pre-aggregated ``county_summary.csv`` cannot be filtered).  The two
+    paths agree on the shared columns; the frame path leaves
+    ``water_body_distance_share`` null (that column is notebook-only).
+
+    **Price bands (P3b):** the band edges are quintiles of the medians
+    of the counties that meet ``min_county_n`` — equal county-frequency
+    bands, recomputed when the filter changes so the legend always
+    matches the map.
     """
     app_exports = request.app.state.app_exports
-    df = app_exports.require("county_summary_df", "county_summary.csv")
-
-    # CONFIG.MIN_COUNTY_N from the manifest (Cell 9.7's config block).
-    min_county_n = 10
-    if app_exports.manifest:
-        min_county_n = int(app_exports.manifest.get("config", {}).get("MIN_COUNTY_N", min_county_n))
-
-    rows = [
-        CountySummaryRow(
-            county=str(r["county"]),
-            n_listings=int(r["n_listings"]),
-            median_price_per_acre_ksh=float(r["median_price_per_acre_ksh"]),
-            q1_price_per_acre_ksh=float(r["q1_price_per_acre_ksh"]),
-            q3_price_per_acre_ksh=float(r["q3_price_per_acre_ksh"]),
-            mean_log_price_per_acre=float(r["mean_log_price_per_acre"]),
-            water_body_distance_share=float(r["water_body_distance_share"]),
-            n_below_min_county_n=bool(r["n_below_min_county_n"]),
+    canonical = canonical_prop_type_or_none(prop_type)
+    if prop_type is not None and canonical is None:
+        raise AppError(
+            code="VALIDATION_ERROR",
+            message=(
+                f"prop_type must be one of {PROPERTY_TYPES} (case-insensitive "
+                f"exact match), got {prop_type!r}."
+            ),
+            status_code=422,
+            details={"allowed": PROPERTY_TYPES},
         )
-        for _, r in df.iterrows()
+
+    # ---- Shared corpus-level stats (property types, unmapped rows). ----
+    # The scored frame is loaded LAZILY (only required when prop_type is
+    # set — the filtered path needs it): on the unfiltered CSV path a
+    # missing parquet degrades property_types to an empty list rather
+    # than 500-ing the whole summary (backward compatibility with the
+    # pre-P3b degraded behaviour, which 503'd on county_summary.csv).
+    scored_df = getattr(app_exports, "listings_scored_df", None)
+    if scored_df is None and canonical is not None:
+        app_exports.require("listings_scored_df", "listings_scored.parquet")
+        scored_df = app_exports.listings_scored_df
+    if scored_df is not None:
+        property_types = compute_property_type_counts(scored_df)
+        unmapped = count_unmapped_prop_types(scored_df)
+    else:
+        property_types = []
+        unmapped = 0
+
+    # ---- min_county_n from the manifest config (P3b fix: no typed-10
+    #      fallback masking a missing artifact — null + data_quality). ----
+    min_county_n = min_county_n_from_manifest(app_exports.manifest)
+    data_quality = "min_county_n_missing" if min_county_n is None else None
+
+    # ---- Per-county rows: CSV path (unfiltered) or frame path (filtered). ----
+    if canonical is None:
+        df = app_exports.require("county_summary_df", "county_summary.csv")
+        rows = [
+            CountySummaryRow(
+                county=str(r["county"]),
+                n_listings=int(r["n_listings"]),
+                median_price_per_acre_ksh=float(r["median_price_per_acre_ksh"]),
+                q1_price_per_acre_ksh=float(r["q1_price_per_acre_ksh"]),
+                q3_price_per_acre_ksh=float(r["q3_price_per_acre_ksh"]),
+                mean_log_price_per_acre=float(r["mean_log_price_per_acre"]),
+                water_body_distance_share=_maybe_float(r["water_body_distance_share"]),
+                n_below_min_county_n=(
+                    None if min_county_n is None else bool(r["n_below_min_county_n"])
+                ),
+            )
+            for _, r in df.iterrows()
+        ]
+    else:
+        mask = scored_df["prop_type"].fillna("").str.lower() == canonical.lower()
+        filtered = scored_df[mask]
+        agg = summarize_frame_by_county(filtered, min_county_n)
+        rows = [
+            CountySummaryRow(
+                county=str(r["county"]),
+                n_listings=int(r["n_listings"]),
+                median_price_per_acre_ksh=_maybe_float(r["median_price_per_acre_ksh"]),
+                q1_price_per_acre_ksh=_maybe_float(r["q1_price_per_acre_ksh"]),
+                q3_price_per_acre_ksh=_maybe_float(r["q3_price_per_acre_ksh"]),
+                mean_log_price_per_acre=_maybe_float(r["mean_log_price_per_acre"]),
+                water_body_distance_share=None,
+                n_below_min_county_n=(
+                    None if min_county_n is None else bool(r["n_below_min_county_n"])
+                ),
+            )
+            for _, r in agg.iterrows()
+        ]
+
+    # ---- Price bands: quintiles of the medians of eligible counties. ----
+    eligible_medians = [
+        r.median_price_per_acre_ksh
+        for r in rows
+        if not r.n_below_min_county_n  # None (unknown threshold) -> excluded too
     ]
-    return CountySummaryResponse(counties=rows, n_counties=len(rows), min_county_n=min_county_n)
+    bands, bands_reason = compute_price_bands(eligible_medians, N_PRICE_BANDS)
+
+    # ---- County totals: from the boundaries service when loaded. ----
+    boundaries = getattr(request.app.state, "county_boundaries_index", None)
+    n_total = (
+        int(getattr(boundaries, "n_counties", 0))
+        if boundaries is not None and getattr(boundaries, "loaded", False)
+        else None
+    )
+
+    return CountySummaryResponse(
+        counties=rows,
+        n_counties=len(rows),
+        min_county_n=min_county_n,
+        prop_type=canonical,
+        property_types=property_types,
+        price_bands=[
+            PriceBandEdge(index=b["index"], lower=b["lower"], upper=b["upper"]) for b in bands
+        ],
+        bands_reason=bands_reason,
+        data_quality=data_quality,
+        n_counties_with_data=len(rows),
+        n_counties_total=n_total,
+        unmapped_prop_type_rows=unmapped,
+    )
+
+
+@router.get(
+    "/counties/{county}/distance-profile",
+    response_model=CountyDistanceProfileResponse,
+)
+async def county_distance_profile(
+    request: Request,
+    county: str,
+    prop_type: str | None = Query(
+        None,
+        description=(
+            "Case-insensitive EXACT canonical match (Land / Farm / Commercial). "
+            "Unknown -> 422 with `allowed`."
+        ),
+    ),
+    limit: int = Query(
+        400,
+        ge=1,
+        le=1000,
+        description="Cap on the deterministic scatter sample (default 400, max 1000).",
+    ),
+) -> CountyDistanceProfileResponse:
+    """Whole-county distance profile (P3b): n, ranges, server-side OLS
+    trend on log(price) vs distance-to-Nairobi, and a deterministic
+    UNBIASED sample of the county's rows (never head()/first-N of a
+    sorted frame — the frame is sorted most-underpriced-first, so a
+    page-based sample would be biased).
+
+    A county below ``min_county_n`` returns the data but sets
+    ``low_support: true`` and omits the trend (null) so the UI can show a
+    "limited data" note instead of a misleading line.
+    """
+    import numpy as np
+
+    app_exports = request.app.state.app_exports
+    df = app_exports.require("listings_scored_df", "listings_scored.parquet")
+
+    canonical = canonical_prop_type_or_none(prop_type)
+    if prop_type is not None and canonical is None:
+        raise AppError(
+            code="VALIDATION_ERROR",
+            message=(
+                f"prop_type must be one of {PROPERTY_TYPES} (case-insensitive "
+                f"exact match), got {prop_type!r}."
+            ),
+            status_code=422,
+            details={"allowed": PROPERTY_TYPES},
+        )
+
+    settings = request.app.state.settings
+    min_county_n = min_county_n_from_manifest(app_exports.manifest)
+
+    county_mask = df["county"].fillna("") == county
+    if int(county_mask.sum()) == 0:
+        # Unknown county -> 422 with the allowed list (per the brief).
+        allowed = sorted(str(v) for v in df["county"].dropna().unique().tolist())
+        raise AppError(
+            code="VALIDATION_ERROR",
+            message=(f"county must match a county in the data (exact match), got {county!r}."),
+            status_code=422,
+            details={"allowed": allowed},
+        )
+
+    sub = df[county_mask]
+    if canonical is not None:
+        sub = sub[sub["prop_type"].fillna("").str.lower() == canonical.lower()]
+
+    n = int(len(sub))
+    low_support = bool(min_county_n is not None and n < min_county_n)
+
+    lats = sub["latitude"].to_numpy(dtype=float)
+    lons = sub["longitude"].to_numpy(dtype=float)
+    dists = compute_distances_to_nairobi(lats, lons, settings.versioned_artifacts_dir)
+    prices = sub["listed_price_per_acre_ksh"].to_numpy(dtype=float)
+    valid = np.isfinite(dists) & (dists >= 0) & np.isfinite(prices) & (prices > 0)
+
+    distance_range = (
+        [float(np.min(dists[valid])), float(np.max(dists[valid]))] if valid.any() else None
+    )
+    price_range = (
+        [float(np.min(prices[valid])), float(np.max(prices[valid]))] if valid.any() else None
+    )
+
+    # Trend is omitted (null) when the county is low-support, per the brief.
+    tb = None if low_support else _trend_block(prices, dists)
+    trend = (
+        DistanceProfileTrend(slope=tb.slope, intercept=tb.intercept, r2=tb.r2, n=tb.n)
+        if tb is not None
+        else None
+    )
+
+    # Deterministic unbiased sample: fixed seed + permutation of the row
+    # indices (never head()/first-N of a sorted frame).  Rebuilt inline so
+    # each point carries its prop_type (the shared helper's point type
+    # doesn't include it).
+    rng = np.random.default_rng(_SCATTER_SEED)
+    perm = rng.permutation(n)
+    take = min(limit, n)
+    idx = perm[:take]
+    sample_rows = sub.iloc[idx].reset_index(drop=True)
+    sample_dists = dists[idx]
+    sample: list[DistanceProfilePoint] = []
+    for i, (_, r) in enumerate(sample_rows.iterrows()):
+        price = r.get("listed_price_per_acre_ksh")
+        try:
+            price_f = float(price)
+        except (TypeError, ValueError):
+            continue
+        if not np.isfinite(price_f) or price_f <= 0:
+            continue
+        sample.append(
+            DistanceProfilePoint(
+                listing_no=_maybe_str(r.get("listing_no")),
+                distance_km=_maybe_float(sample_dists[i]),
+                price_per_acre_ksh=price_f,
+                verdict=_maybe_str(r.get("verdict")),
+                prop_type=_maybe_str(r.get("prop_type")),
+            )
+        )
+
+    return CountyDistanceProfileResponse(
+        county=county,
+        prop_type=canonical,
+        n=n,
+        low_support=low_support,
+        min_county_n=min_county_n,
+        distance_range_km=distance_range,
+        price_range=price_range,
+        trend=trend,
+        sample=sample,
+        n_total=n,
+        n_returned=len(sample),
+        sample_limit=limit,
+    )
 
 
 @router.get("/counties/boundaries")
@@ -157,7 +409,6 @@ async def county_listings(
     /counties/summary (county_summary.csv) — this endpoint does NOT
     recompute them.**
     """
-    from landval.features.geo import haversine_km_vectorised
 
     app_exports = request.app.state.app_exports
     df = app_exports.require("listings_scored_df", "listings_scored.parquet")
@@ -186,14 +437,15 @@ async def county_listings(
 
     # Recompute dist_to_nairobi_km from lat/lon — the column didn't survive
     # into listings_scored.parquet (Cell 9.6 only carries ID_COLUMNS + price
-    # columns, not feature columns).  Uses B1's haversine_km_vectorised
-    # (Cell 4.2's formula, same earth radius 6371.0 km).
+    # columns, not feature columns).  Uses the shared geo_reference helper
+    # (Cell 4.2's haversine formula, same earth radius 6371.0 km, Nairobi
+    # reference point read from scoring_params.json with the canonical
+    # -1.2921 / 36.8219 fallback) so the result agrees with the Overview
+    # endpoint's distance-band summary.
+    settings = request.app.state.settings
     lats = county_df["latitude"].to_numpy(dtype=float)
     lons = county_df["longitude"].to_numpy(dtype=float)
-    valid = np.isfinite(lats) & np.isfinite(lons)
-    dists = np.full(len(county_df), np.nan, dtype=float)
-    if valid.any():
-        dists[valid] = haversine_km_vectorised(lats[valid], lons[valid], NAIROBI_LAT, NAIROBI_LON)
+    dists = compute_distances_to_nairobi(lats, lons, settings.versioned_artifacts_dir)
 
     # Sort by dist_to_nairobi_km ascending (the scatter plot's X axis) so
     # the first page shows the listings closest to Nairobi.
@@ -249,3 +501,23 @@ def _maybe(v: Any) -> Any:
     except (TypeError, ValueError):
         pass
     return v
+
+
+def _maybe_float(v: Any) -> float | None:
+    """Coerce to a finite float or None (no NaN/inf in JSON)."""
+    f = _maybe(v)
+    if f is None:
+        return None
+    try:
+        f = float(f)
+    except (TypeError, ValueError):
+        return None
+    return f if np.isfinite(f) else None
+
+
+def _maybe_str(v: Any) -> str | None:
+    """Coerce to a trimmed string or None."""
+    s = _maybe(v)
+    if s is None:
+        return None
+    return str(s)

@@ -1,30 +1,25 @@
 /**
  * PriceDistanceChart — wide (8/12) card on the Overview grid.
  *
- * Recharts ComposedChart of `listed_price_per_acre_ksh` (log Y) against
- * distance from Nairobi (km, linear X), combining:
- *  - <Scatter> dots for individual listings
- *  - <Line> for the OLS trend curve fitted on log(price) vs distance
- *  - <Area> under the trend curve filled with a diagonal hatch SVG pattern
- *
- * The diagonal hatch pattern is the design's signature chart texture
- * (01_overview/code.html defines `<pattern id="diagonalHatch">` with
- * `<line stroke="#dec1b3" stroke-width="1.25">` at 45°). Recharts renders
- * SVG, so we inject a `<defs>` block with the same pattern and reference it
- * via `fill="url(#overviewHatch)"` on the Area. This is the G1 fix for the
- * F3 gap where the hatch was dropped to a solid fill.
- *
- * Data source: the backend has no dedicated distance-scatter endpoint, so
- * we derive `dist_to_nairobi_km` client-side from each listing's
- * `latitude` / `longitude` (via the haversine helper in
- * `overview-helpers.ts`). The haversine formula and Nairobi reference
- * point (-1.2921, 36.8219) are IDENTICAL to the backend's
- * `landval.features.geo.haversine_km` — verified numerically in G1 (max
- * diff 2.84e-13 km, floating-point noise). The only divergence is the
- * backend's `round(x, 2)` before storing, which adds ≤0.005 km rounding
- * error — invisible on a scatter chart.
+ * O2 build round:
+ *  - Data: every number comes from the /overview/summary response's
+ *    `scatter_sample` (the deterministic, unbiased sample) + `trend`
+ *    (server-computed OLS log-linear fit) + `by_distance_band` (the
+ *    pinned corridor tooltip).  No client-side haversine / OLS / verdict
+ *    counting.
+ *  - Axis fix: the X axis tickFormatter used to render "150km km" because
+ *    both the `unit` prop and the tickFormatter added "km".  Render each
+ *    unit once.
+ *  - Card header controls: refresh (spinning state via isFetching),
+ *    download (CSV of the plotted sample, with active filters in the
+ *    filename).  The design's calendar/quarterly button is NOT rendered
+ *    because listings carry no date column — see known-gaps.md #96.
+ *  - Pinned corridor tooltip: built from `by_distance_band` so the user
+ *    sees "<from>-<to> KM · Median KSh X · Range q1-q3 · N lst" without
+ *    hovering.
  */
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Area,
   CartesianGrid,
@@ -40,93 +35,42 @@ import {
 import { ValuationCard } from '@/components/ValuationCard';
 import { EmptyState } from '@/components/EmptyState';
 import { LoadingSkeleton } from '@/components/LoadingSkeleton';
-import type { ApiQueryResult } from '@/lib/api/hooks';
-import type { ListingsScoredResponse } from '@/lib/api/types';
-import {
-  NAIROBI_LAT,
-  NAIROBI_LON,
-  haversineKm,
-  formatCompactKSh,
-} from './overview-helpers';
+import type { OverviewSummaryResponse } from '@/lib/api/types';
+import { formatCompactMoney } from '@/lib/currency/format';
+
+import { exportScatterCsv, formatCompactKSh } from './overview-helpers';
 
 interface PriceDistanceChartProps {
-  query: ApiQueryResult<ListingsScoredResponse>;
-  filterLabel: string;
+  overview: OverviewSummaryResponse | undefined;
+  isLoading: boolean;
+  isError: boolean;
+  onRetry: () => void;
+  county: string;
+  propType: string;
 }
 
 interface ChartPoint {
   distance_km: number;
   price_per_acre: number;
   county: string | null;
+  listing_no: string | null;
+  verdict: string | null;
 }
 
 interface TrendPoint {
   distance_km: number;
   trend: number;
-  /** Lower bound of the trend area (log-space, for the hatch fill area) */
   trend_floor: number;
 }
 
 const PRIMARY_CONTAINER = '#e8742a';
 const TREND_STROKE = '#9d4400';
-/** The hatch pattern's stroke color — matches design's `#dec1b3` (outline-variant). */
 const HATCH_STROKE = '#dec1b3';
 
-/**
- * Ordinary-least-squares regression of `log(price_per_acre)` on
- * `distance_km`, returning a 20-sample trend line across the x-domain
- * (exp()'d back to KSh) plus a floor series for the Area fill.
- *
- * Ported from market-insights/helpers.ts `computeLogTrend` so both pages
- * use the same trend computation. The floor is set to the y-domain minimum
- * so the Area fills from the trend line down to the bottom of the chart.
- */
-function computeTrendArea(
-  points: ChartPoint[],
-  yFloor: number,
-): TrendPoint[] | null {
-  const valid = points.filter(
-    (p) =>
-      Number.isFinite(p.distance_km) &&
-      p.distance_km > 0 &&
-      Number.isFinite(p.price_per_acre) &&
-      p.price_per_acre > 0,
-  );
-  if (valid.length < 2) return null;
-
-  const n = valid.length;
-  const xs = valid.map((p) => p.distance_km);
-  const ys = valid.map((p) => Math.log(p.price_per_acre));
-  const xMean = xs.reduce((a, b) => a + b, 0) / n;
-  const yMean = ys.reduce((a, b) => a + b, 0) / n;
-
-  let num = 0;
-  let den = 0;
-  for (let i = 0; i < n; i++) {
-    num += (xs[i] - xMean) * (ys[i] - yMean);
-    den += (xs[i] - xMean) ** 2;
-  }
-  if (den === 0) return null;
-
-  const slope = num / den;
-  const intercept = yMean - slope * xMean;
-
-  const xMin = Math.min(...xs);
-  const xMax = Math.max(...xs);
-  const STEPS = 20;
-  const sampled: TrendPoint[] = [];
-  for (let i = 0; i <= STEPS; i++) {
-    const x = xMin + (xMax - xMin) * (i / STEPS);
-    sampled.push({
-      distance_km: x,
-      trend: Math.exp(slope * x + intercept),
-      trend_floor: yFloor,
-    });
-  }
-  return sampled;
-}
-
-function ChartTooltip({ active, payload }: {
+function ChartTooltip({
+  active,
+  payload,
+}: {
   active?: boolean;
   payload?: Array<{ payload: ChartPoint }>;
 }) {
@@ -139,7 +83,7 @@ function ChartTooltip({ active, payload }: {
         {p.county ?? 'Listing'}
       </div>
       <div className="text-body-medium font-body-medium text-on-surface">
-        {formatCompactKSh(p.price_per_acre)} / acre
+        {formatCompactMoney(p.price_per_acre)} / acre
       </div>
       <div className="text-caption-sm font-caption-sm text-on-surface-variant">
         {p.distance_km.toFixed(0)} km from Nairobi
@@ -148,69 +92,177 @@ function ChartTooltip({ active, payload }: {
   );
 }
 
-export function PriceDistanceChart({ query, filterLabel }: PriceDistanceChartProps) {
-  const { data, isLoading, isError, refetch } = query;
+export function PriceDistanceChart({
+  overview,
+  isLoading,
+  isError,
+  onRetry,
+  county,
+  propType,
+}: PriceDistanceChartProps) {
+  const { t } = useTranslation();
+  const [view, setView] = useState<'listings' | 'bands'>('listings');
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [pinnedBandIdx, setPinnedBandIdx] = useState<number | null>(null);
 
-  // Build the scatter dataset (filter out listings without lat/lon or price).
+  // Build the scatter dataset from the response's `scatter_sample`.
   const points: ChartPoint[] = useMemo(() => {
-    if (!data?.listings) return [];
-    return data.listings
-      .map((row) => {
-        const lat = row.latitude;
-        const lon = row.longitude;
-        const price = row.listed_price_per_acre_ksh;
-        if (
-          lat == null ||
-          lon == null ||
-          !Number.isFinite(lat) ||
-          !Number.isFinite(lon) ||
-          !Number.isFinite(price) ||
-          price <= 0
-        ) {
-          return null;
-        }
+    if (!overview?.scatter_sample) return [];
+    return overview.scatter_sample.points
+      .map((p) => {
+        const d = p.distance_km;
+        if (d == null || !Number.isFinite(d) || d < 0) return null;
+        if (!Number.isFinite(p.price_per_acre_ksh) || p.price_per_acre_ksh <= 0) return null;
         return {
-          distance_km: haversineKm(NAIROBI_LAT, NAIROBI_LON, lat, lon),
-          price_per_acre: price,
-          county: row.county,
+          distance_km: d,
+          price_per_acre: p.price_per_acre_ksh,
+          county: p.county,
+          listing_no: p.listing_no,
+          verdict: p.verdict,
         };
       })
       .filter((p): p is ChartPoint => p !== null);
-  }, [data]);
+  }, [overview]);
 
-  // Log-scale Y axis needs a strictly-positive domain; compute from data,
-  // falling back to a sensible Kenya-per-acre range when empty.
+  // Y domain — log scale, strictly positive.  Computed from the scatter
+  // sample (with a sensible Kenya-per-acre fallback when empty).
   const yDomain = useMemo<[number, number]>(() => {
-    if (points.length === 0) return [10_000, 10_000_000];
+    if (points.length === 0) return [50_000, 20_000_000];
     const prices = points.map((p) => p.price_per_acre);
     const min = Math.min(...prices);
     const max = Math.max(...prices);
     return [Math.max(1, Math.floor(min / 10) * 10), Math.ceil(max / 10) * 10];
   }, [points]);
 
-  // Trend curve + area floor series for the hatch fill.
-  const trendData = useMemo(
-    () => computeTrendArea(points, yDomain[0]),
-    [points, yDomain],
-  );
+  // Trend line + area floor — uses the SERVER-COMPUTED slope / intercept
+  // (no client-side OLS).  We sample 20 points across the data's x-domain
+  // and exp() them back to KSh.
+  const trendData = useMemo<TrendPoint[] | null>(() => {
+    if (!overview?.trend || overview.trend.slope == null || overview.trend.intercept == null) {
+      return null;
+    }
+    if (points.length === 0) return null;
+    const xs = points.map((p) => p.distance_km);
+    const xMin = Math.min(...xs);
+    const xMax = Math.max(...xs);
+    const STEPS = 20;
+    const out: TrendPoint[] = [];
+    for (let i = 0; i <= STEPS; i++) {
+      const x = xMin + (xMax - xMin) * (i / STEPS);
+      out.push({
+        distance_km: x,
+        trend: Math.exp(overview.trend.slope * x + overview.trend.intercept),
+        trend_floor: yDomain[0],
+      });
+    }
+    return out;
+  }, [overview, points, yDomain]);
+
+  // Pinned corridor tooltip — built from by_distance_band.  Defaults to
+  // the band with the most listings.
+  const bands = useMemo(() => overview?.by_distance_band?.bands ?? [], [overview]);
+  const pinnedBand = useMemo(() => {
+    if (bands.length === 0) return null;
+    const idx =
+      pinnedBandIdx != null
+        ? pinnedBandIdx
+        : bands.reduce((best, b, i, arr) => (b.n > arr[best].n ? i : best), 0);
+    return { ...bands[idx], idx };
+  }, [bands, pinnedBandIdx]);
+
+  const onDownload = () => {
+    if (!overview) return;
+    const { csv, filename } = exportScatterCsv(overview.scatter_sample.points, {
+      county,
+      propType,
+    });
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const onRefresh = () => {
+    setIsRefreshing(true);
+    onRetry();
+    // Spin for ~600ms minimum so the user sees the refresh affordance.
+    setTimeout(() => setIsRefreshing(false), 600);
+  };
 
   return (
     <ValuationCard className="lg:col-span-8" noPadding>
       <div className="p-space-lg">
-        <div className="flex items-baseline justify-between mb-space-md">
+        {/* ---- Header ---- */}
+        <div className="flex items-start justify-between gap-4 mb-4">
           <div>
             <div className="flex items-center gap-2">
               <h2 className="font-headline-section text-headline-section text-on-surface">
-                Price by distance from Nairobi
+                {t('overview.priceByDistance')}
               </h2>
               <span className="px-2 py-0.5 rounded-full bg-surface-container-highest text-secondary text-xs font-medium uppercase tracking-wider">
-                log scale
+                {t('overview.logScale')}
               </span>
             </div>
             <p className="text-body-regular font-body-regular text-secondary mt-1">
-              Land price decay estimate model across transport corridors · {filterLabel}
+              {t('overview.showingNSample', {
+                shown: overview?.scatter_sample?.n_returned ?? 0,
+                total: overview?.scatter_sample?.n_total ?? 0,
+              })}
             </p>
           </div>
+          {/* Card header controls — refresh + download only (no calendar). */}
+          <div className="flex items-center gap-1.5 shrink-0" role="toolbar" aria-label="Chart controls">
+            <button
+              type="button"
+              onClick={onRefresh}
+              title={t('overview.refresh')}
+              aria-label={t('overview.refresh')}
+              className="w-9 h-9 rounded-full bg-surface-container-low text-on-surface-variant hover:text-primary hover:bg-surface-container flex items-center justify-center transition-colors"
+            >
+              <span
+                className={`material-symbols-outlined text-[18px] ${isRefreshing ? 'animate-spin' : ''}`}
+                aria-hidden="true"
+              >
+                refresh
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={onDownload}
+              title={t('overview.download')}
+              aria-label={t('overview.download')}
+              className="w-9 h-9 rounded-full bg-surface-container-low text-on-surface-variant hover:text-primary hover:bg-surface-container flex items-center justify-center transition-colors"
+            >
+              <span className="material-symbols-outlined text-[18px]" aria-hidden="true">
+                download
+              </span>
+            </button>
+          </div>
+        </div>
+
+        {/* View toggle (Listings / Bands) */}
+        <div className="flex items-center gap-1 mb-3" role="tablist" aria-label="Chart view">
+          {(['listings', 'bands'] as const).map((v) => (
+            <button
+              key={v}
+              type="button"
+              role="tab"
+              aria-selected={view === v}
+              onClick={() => setView(v)}
+              className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
+                view === v
+                  ? 'bg-[#1e1a17] text-white'
+                  : 'bg-surface-container-low text-on-surface-variant hover:text-on-surface'
+              }`}
+            >
+              {t(`overview.${v}`)}
+            </button>
+          ))}
         </div>
 
         <div className="h-72 md:h-80 w-full">
@@ -219,24 +271,35 @@ export function PriceDistanceChart({ query, filterLabel }: PriceDistanceChartPro
           ) : isError ? (
             <EmptyState
               icon="cloud_off"
-              title="Couldn't load listings"
-              message="The scored listings feed is unavailable. Try again once the backend finishes loading its artifacts."
-              actionLabel="Retry"
-              onAction={() => refetch()}
+              title={t('common.error')}
+              message={t('common.dataUnavailable')}
+              actionLabel={t('common.retry')}
+              onAction={onRetry}
             />
-          ) : points.length === 0 ? (
+          ) : points.length === 0 && view === 'listings' ? (
             <EmptyState
               icon="scatter_plot"
-              title="No listings in this view"
-              message="No scored listings match the current county / property-type filter, or none have usable lat/lon. Try widening the filter."
+              title={t('overview.emptySelection')}
+              message=""
             />
           ) : (
             <ResponsiveContainer width="100%" height="100%">
-              <ComposedChart margin={{ top: 8, right: 16, bottom: 32, left: 8 }}>
-                {/* Diagonal hatch pattern — matches 01_overview/code.html's
-                    `<pattern id="diagonalHatch">` definition:
-                    patternTransform="rotate(45)", stroke="#dec1b3", width=8.
-                    Recharts renders <defs> children into the chart's SVG. */}
+              <ComposedChart
+                margin={{ top: 8, right: 16, bottom: 32, left: 8 }}
+                onClick={(e) => {
+                  // Click on a band's x-region to pin the corridor tooltip.
+                  if (e && typeof e === 'object' && 'activeLabel' in e) {
+                    const label = (e as { activeLabel?: number }).activeLabel;
+                    if (typeof label === 'number') {
+                      // Find the band whose [lower, upper) contains `label`.
+                      const idx = bands.findIndex(
+                        (b) => label >= b.lower_km && (b.upper_km == null || label < b.upper_km),
+                      );
+                      if (idx >= 0) setPinnedBandIdx(idx);
+                    }
+                  }
+                }}
+              >
                 <defs>
                   <pattern
                     id="overviewHatch"
@@ -265,12 +328,14 @@ export function PriceDistanceChart({ query, filterLabel }: PriceDistanceChartPro
                   type="number"
                   dataKey="distance_km"
                   name="Distance from Nairobi"
-                  unit=" km"
                   stroke="#574238"
                   tick={{ fill: '#574238', fontSize: 12 }}
-                  tickFormatter={(v: number) => `${Math.round(v)}km`}
+                  // FIX (O2): previously rendered "150km km" because both
+                  // `unit` and tickFormatter added "km".  Render each unit
+                  // once — drop the `unit` prop and let the formatter own it.
+                  tickFormatter={(v: number) => `${Math.round(v)} km`}
                   label={{
-                    value: 'Distance from Nairobi (km)',
+                    value: t('overview.priceByDistance', { defaultValue: 'Distance from Nairobi (km)' }),
                     position: 'insideBottom',
                     offset: -12,
                     fill: '#574238',
@@ -280,23 +345,20 @@ export function PriceDistanceChart({ query, filterLabel }: PriceDistanceChartPro
                 <YAxis
                   type="number"
                   dataKey="price_per_acre"
-                  name="Price per acre (KSh)"
+                  name="Price per acre"
                   scale="log"
                   domain={yDomain}
                   allowDataOverflow={false}
                   stroke="#574238"
                   tick={{ fill: '#574238', fontSize: 12 }}
                   tickFormatter={(v: number) => formatCompactKSh(v).replace('KSh ', '')}
-                  width={64}
+                  width={56}
                 />
                 <Tooltip
                   cursor={{ strokeDasharray: '3 3', stroke: 'rgba(27,21,18,0.2)' }}
                   content={<ChartTooltip />}
                 />
-                {/* Hatch-filled area under the trend curve.
-                    dataKey="trend" is the curve; the Area fills between
-                    `trend` and `trend_floor` (the y-domain minimum). */}
-                {trendData && (
+                {view === 'bands' && trendData && (
                   <Area
                     type="monotone"
                     dataKey="trend"
@@ -306,13 +368,9 @@ export function PriceDistanceChart({ query, filterLabel }: PriceDistanceChartPro
                     fillOpacity={1}
                     isAnimationActive={false}
                     name="Trend area"
-                    // Area needs a base to fill down to — use the floor series
                     baseValue={yDomain[0]}
                   />
                 )}
-                {/* Trend curve line on top of the hatch fill.
-                    Uses a gradient-like deep-orange stroke (#9d4400) matching
-                    the design's curveGradient start color. */}
                 {trendData && (
                   <Line
                     type="monotone"
@@ -325,16 +383,58 @@ export function PriceDistanceChart({ query, filterLabel }: PriceDistanceChartPro
                     name="Trend (log-fit)"
                   />
                 )}
-                <Scatter
-                  data={points}
-                  fill={PRIMARY_CONTAINER}
-                  fillOpacity={0.7}
-                  stroke={PRIMARY_CONTAINER}
-                />
+                {view === 'listings' && (
+                  <Scatter
+                    data={points}
+                    fill={PRIMARY_CONTAINER}
+                    fillOpacity={0.7}
+                    stroke={PRIMARY_CONTAINER}
+                  />
+                )}
               </ComposedChart>
             </ResponsiveContainer>
           )}
         </div>
+
+        {/* Pinned corridor tooltip card — from by_distance_band */}
+        {pinnedBand && pinnedBand.n > 0 && (
+          <div
+            className="mt-3 p-3 rounded-DEFAULT bg-surface-container-lowest border border-surface-container flex flex-col gap-1 shadow-sm"
+            aria-live="polite"
+          >
+            <div className="flex items-center justify-between">
+              <span className="font-caption-sm text-caption-sm text-secondary uppercase font-semibold">
+                {pinnedBand.label}
+              </span>
+              <span
+                className="inline-block w-2 h-2 rounded-full bg-primary-container"
+                aria-hidden="true"
+              />
+            </div>
+            <div className="font-title-card text-title-card text-on-surface">
+              {t('overview.medianKsh', {
+                value:
+                  pinnedBand.median_price_per_acre_ksh != null
+                    ? formatCompactMoney(pinnedBand.median_price_per_acre_ksh)
+                    : '—',
+              })}
+            </div>
+            {pinnedBand.q1_price_per_acre_ksh != null &&
+              pinnedBand.q3_price_per_acre_ksh != null && (
+                <div className="flex items-center justify-between text-caption-sm font-caption-sm text-on-surface-variant pt-1 mt-1 border-t border-surface-container">
+                  <span>
+                    {t('overview.rangeQ1Q3', {
+                      q1: formatCompactMoney(pinnedBand.q1_price_per_acre_ksh),
+                      q3: formatCompactMoney(pinnedBand.q3_price_per_acre_ksh),
+                    })}
+                  </span>
+                  <span className="text-secondary font-medium">
+                    {t('overview.nListings', { n: pinnedBand.n })}
+                  </span>
+                </div>
+              )}
+          </div>
+        )}
       </div>
     </ValuationCard>
   );

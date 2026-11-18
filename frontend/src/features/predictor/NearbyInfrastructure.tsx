@@ -18,6 +18,9 @@
  * distinguish them: fallback names render in `text-secondary` (lighter)
  * with an "approximate" pill badge after the name, while real OSM names
  * keep the default `text-on-surface` treatment.
+ *
+ * P2b: ring colours come from the design tokens (primary-container,
+ * primary, market-caution) — no inline hex.  Labels via i18n.
  */
 import { useTranslation } from 'react-i18next';
 
@@ -50,13 +53,13 @@ export function NearbyInfrastructure({ diagnostics, namedPois }: NearbyInfrastru
 
       <div className="grid grid-cols-3 gap-2 mb-6">
         <div className="flex flex-col items-center p-2 rounded-xl bg-surface-container-low text-center">
-          <ScoreRing score={amenities} label="Amenities" color="#E8742A" />
+          <ScoreRing score={amenities} label={t('predictor.score.amenities')} color="#E8742A" />
         </div>
         <div className="flex flex-col items-center p-2 rounded-xl bg-surface-container-low text-center">
-          <ScoreRing score={accessibility} label="Accessibility" color="#9D4400" />
+          <ScoreRing score={accessibility} label={t('predictor.score.accessibility')} color="#9D4400" />
         </div>
         <div className="flex flex-col items-center p-2 rounded-xl bg-surface-container-low text-center">
-          <ScoreRing score={infrastructure} label="Infrastructure" color="#E3A008" />
+          <ScoreRing score={infrastructure} label={t('predictor.score.infrastructure')} color="#E3A008" />
         </div>
       </div>
 
@@ -67,7 +70,7 @@ export function NearbyInfrastructure({ diagnostics, namedPois }: NearbyInfrastru
       <div className="border-t border-black/[0.06] pt-4">
         <ul className="flex flex-col gap-1 max-h-72 overflow-y-auto pr-1">
           {namedPois.length === 0 ? (
-            <li className="text-caption-sm text-secondary py-2">No named POIs within range.</li>
+            <li className="text-caption-sm text-secondary py-2">{t('predictor.noNamedPois')}</li>
           ) : (
             namedPois.map((p, i) => (
               <li
@@ -75,7 +78,7 @@ export function NearbyInfrastructure({ diagnostics, namedPois }: NearbyInfrastru
                 className="flex items-center justify-between gap-3 py-1.5 border-b border-black/[0.04] last:border-0"
               >
                 <div className="flex items-center gap-2 min-w-0">
-                  <span className="material-symbols-outlined text-[16px] text-secondary flex-shrink-0">
+                  <span className="material-symbols-outlined text-[16px] text-secondary flex-shrink-0" aria-hidden="true">
                     place
                   </span>
                   <div className="flex flex-col min-w-0">
@@ -89,7 +92,7 @@ export function NearbyInfrastructure({ diagnostics, namedPois }: NearbyInfrastru
                       </span>
                       {p.is_fallback === true && (
                         <span className="inline-flex items-center rounded-full bg-surface-container-highest text-secondary text-caption-sm px-1.5 py-0.5 whitespace-nowrap">
-                          approximate
+                          {t('predictor.approximate')}
                         </span>
                       )}
                     </div>

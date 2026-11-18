@@ -57,6 +57,34 @@ class Settings(BaseSettings):
     # replica but under-counts across replicas.  Set REDIS_URL to switch.
     redis_url: str = ""
 
+    # ---- FX (P8b: rate served via /meta; NO default in code) ----
+    # The KSh ↔ USD conversion rate used by the frontend's currency toggle.
+    # There is deliberately NO default: when FX_KSH_PER_USD is unset, /meta
+    # serves fx=null and the frontend disables its USD toggle with an
+    # honest "not available" note instead of guessing a rate.  Set the env
+    # var to enable USD display ("1 USD = FX_KSH_PER_USD KSh").
+    # The rate is read at startup; changing the env var requires a restart.
+    # A live FX feed is a separate architecture decision (not built).
+    fx_ksh_per_usd: float | None = None
+    # Free-form "as of" date for the rate ("YYYY-MM-DD" recommended) —
+    # surfaced via /meta so the Settings page can say
+    # "1 USD = N KSh, as of D (source)" rather than implying the rate is
+    # current.  Empty string -> null in the response.
+    fx_as_of: str = ""
+    # Who maintains the rate (e.g. "manually maintained via FX_KSH_PER_USD").
+    # Surfaced via /meta so the UI can clearly say fixed vs live.  A future
+    # live FX feed would set its provider name here.  Empty -> null.
+    fx_source: str = ""
+
+    # ---- Deal Finder export cap (P4b) ----
+    # Max rows served by GET /api/v1/listings/scored/export.csv.  Empty/0
+    # = uncapped (default) — the streaming endpoint handles full-corpus
+    # exports without a cap.  Set LISTINGS_EXPORT_MAX_ROWS to bound memory
+    # on very small instances; when the cap truncates an export the
+    # response carries X-Export-Truncated headers rather than silently
+    # cutting rows.
+    listings_export_max_rows: int | None = None
+
     @property
     def cors_origins(self) -> list[str]:
         """Parse the comma-separated ALLOWED_ORIGINS into a list."""

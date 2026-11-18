@@ -107,7 +107,7 @@ class AmenityProximityService:
             raise AppError(
                 code="VALIDATION_ERROR",
                 message=(
-                    f"near_amenity must be one of {list(SUPPORTED_AMENITIES)}, " f"got {amenity!r}"
+                    f"near_amenity must be one of {list(SUPPORTED_AMENITIES)}, got {amenity!r}"
                 ),
                 status_code=422,
                 details={"allowed": list(SUPPORTED_AMENITIES)},

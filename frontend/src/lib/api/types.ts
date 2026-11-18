@@ -29,11 +29,46 @@ export interface CoverageThresholds {
   radius_km: number;
 }
 
+/** P8b: KSh↔USD FX block served by /meta.  No default rate: the block is
+ *  null until the operator sets FX_KSH_PER_USD (frontend disables USD). */
+export interface FxBlock {
+  /** 1 USD = N KSh (operator-configured; no code default). */
+  ksh_per_usd: number;
+  /** Free-form date the operator set the rate; null when unset. */
+  as_of: string | null;
+  /** Who maintains the rate — "fixed" vs live; null when unset. */
+  source: string | null;
+}
+
+/** The flagged-listing rule (P7b/P8b): prices outside the lower–upper
+ *  percentile window carry data_quality_flag = true.  Served on /meta
+ *  and /data/price-distribution so the UI never re-types "1st–99th". */
+export interface FlagDefinition {
+  lower_pct: number;
+  upper_pct: number;
+}
+
+/** P8b: plain-language methodology block (sources note, verifiable
+ *  cleaning steps, feature groups) — the About page renders from it. */
+export interface MethodologyBlock {
+  sources_note: string | null;
+  cleaning_steps: string[] | null;
+  feature_groups: string[] | null;
+}
+
 export interface MetaResponse {
   model_version: string | null;
   data_date: string | null;
   coverage: CoverageThresholds | null;
   ensemble_weights: Record<string, unknown> | null;
+  /** P8b: KSh↔USD rate from backend settings.  Null when the operator
+   *  hasn't configured one — the USD toggle is then disabled (honest
+   *  "not available"), never a typed fallback. */
+  fx: FxBlock | null;
+  /** P7b/P8b: the flagged-listing percentile window (canonical constant). */
+  flag_definition: FlagDefinition | null;
+  /** P8b: methodology copy (sources note / cleaning steps / feature groups). */
+  methodology: MethodologyBlock | null;
 }
 
 // ---- Predict (B2) ----
@@ -44,6 +79,31 @@ export interface MetaResponse {
  * string `"not_sure"`. `null` is treated identically to `"not_sure"`.
  */
 export type ChecklistValue = boolean | 'not_sure' | null;
+
+// ---- Predict options (P2b) ----
+// Mirror of backend/app/schemas/predict_options.py — every field name +
+// nullability matches the Pydantic schema verbatim.  Keep in sync.
+
+export interface PredictPropertyTypeOption {
+  name: string;
+  n: number;
+}
+
+export interface PredictSizeAcresBounds {
+  min: number;
+  max: number;
+  median: number;
+}
+
+export interface PredictOptionsResponse {
+  property_types: PredictPropertyTypeOption[];
+  unmapped_prop_type_rows: number;
+  size_acres: PredictSizeAcresBounds;
+  default_confidence_level: number;
+  allowed_confidence_levels: number[];
+  parcel_features: string[];
+  property_types_canonical: string[];
+}
 
 export interface PredictRequest {
   lat: number;
@@ -128,18 +188,76 @@ export interface PredictResponse {
 export interface CountySummaryRow {
   county: string;
   n_listings: number;
-  median_price_per_acre_ksh: number;
-  q1_price_per_acre_ksh: number;
-  q3_price_per_acre_ksh: number;
-  mean_log_price_per_acre: number;
-  water_body_distance_share: number;
-  n_below_min_county_n: boolean;
+  /** Null when the county has no usable rows under the current filter. */
+  median_price_per_acre_ksh: number | null;
+  q1_price_per_acre_ksh: number | null;
+  q3_price_per_acre_ksh: number | null;
+  mean_log_price_per_acre: number | null;
+  /** Null on the frame path (the notebook column isn't filterable). */
+  water_body_distance_share: number | null;
+  /** Null when the min_county_n threshold itself is unavailable. */
+  n_below_min_county_n: boolean | null;
+}
+
+/** P3b: canonical property type + corpus row count (dropdown data). */
+export interface CountyPropertyTypeCount {
+  name: string;
+  n: number;
+}
+
+/** P3b: one data-driven colour-band edge (quintiles of county medians). */
+export interface PriceBandEdge {
+  index: number;
+  lower: number;
+  /** Null = the open top band (>= lower). */
+  upper: number | null;
 }
 
 export interface CountySummaryResponse {
   counties: CountySummaryRow[];
   n_counties: number;
-  min_county_n: number;
+  /** Null + data_quality="min_county_n_missing" when the config lacks it. */
+  min_county_n: number | null;
+  prop_type: string | null;
+  property_types: CountyPropertyTypeCount[];
+  price_bands: PriceBandEdge[];
+  bands_reason: string | null;
+  data_quality: string | null;
+  n_counties_with_data: number | null;
+  n_counties_total: number | null;
+  unmapped_prop_type_rows: number | null;
+}
+
+// ---- County distance profile (P3b) ----
+
+export interface DistanceProfileTrend {
+  slope: number | null;
+  intercept: number | null;
+  r2: number | null;
+  n: number;
+}
+
+export interface DistanceProfilePoint {
+  listing_no: string | null;
+  distance_km: number | null;
+  price_per_acre_ksh: number;
+  verdict: string | null;
+  prop_type: string | null;
+}
+
+export interface CountyDistanceProfileResponse {
+  county: string;
+  prop_type: string | null;
+  n: number;
+  low_support: boolean;
+  min_county_n: number | null;
+  distance_range_km: [number, number] | null;
+  price_range: [number, number] | null;
+  trend: DistanceProfileTrend | null;
+  sample: DistanceProfilePoint[];
+  n_total: number;
+  n_returned: number;
+  sample_limit: number;
 }
 
 export interface CountyRowCount {
@@ -246,6 +364,27 @@ export interface MetricsTableResponse {
 export interface MetricsResponse {
   table: MetricsTableResponse;
   metrics_json: Record<string, unknown>;
+  /** P5b: the production run's ensemble row's model name (null when absent —
+   *  the UI shows "not available", no fallbacks). */
+  ensemble_model: string | null;
+  /** P5b: production run name + created date, for the card subtitle. */
+  production_run_label: string | null;
+  /** P5b: nominal interval coverage levels present in the data. */
+  interval_levels: number[] | null;
+  default_interval_level: number | null;
+  /** P5b: documented interval method (null when unknown). */
+  interval_method: string | null;
+  /** P5b: row counts of the loaded prediction parquets. */
+  n_test: number | null;
+  n_dev: number | null;
+  /** P5b: per-model display_name + family (backend registry mapping). */
+  model_info: Record<string, { display_name: string; family: string }>;
+}
+
+/** P5b: one support-measure group with its i18n label key. */
+export interface SupportMeasureOption {
+  value: string;
+  label_key: string;
 }
 
 export interface FeatureEvaluationRow {
@@ -271,6 +410,28 @@ export interface ShapGlobalRow {
   mean_abs_shap: number;
 }
 
+/** One ensemble member on the /model/explainability payload (P6b).
+ *  Backend schema: backend/app/schemas/app_exports.py ExplainabilityModel. */
+export interface ExplainabilityModel {
+  key: string;
+  display_name: string;
+  family: string | null;
+  ensemble_weight: number | null;
+  has_shap: boolean;
+}
+
+/** The /model/explainability coverage block (P6b) — fractions in [0,1]
+ *  with a source flag.  Shares come from the backend normalised; the
+ *  frontend renders what it gets and never renormalises. */
+export interface ExplainabilityCoverage {
+  tree_share_explained_by_shap: number | null;
+  tabnet_share_not_covered: number | null;
+  explained_members: string[] | null;
+  unexplained_members: string[] | null;
+  source: 'recomputed' | 'manifest' | null;
+  note?: string | null;
+}
+
 export interface FeatureImportanceRow {
   model: string;
   feature: string;
@@ -292,7 +453,15 @@ export interface ExplainabilityResponse {
   shap_global: ShapGlobalRow[];
   feature_importance: FeatureImportanceRow[];
   feature_labels: Record<string, FeatureLabel>;
-  ensemble_shap_coverage: Record<string, unknown>;
+  /** P6b: the manifest block is now a documented shape (fractions +
+   *  source). Older payloads served a raw dict; the fields below are
+   *  optional so those still type-check. */
+  ensemble_shap_coverage: ExplainabilityCoverage | Record<string, unknown>;
+  /** P6b additions (optional — older payloads lack them). */
+  models?: ExplainabilityModel[];
+  default_model?: string | null;
+  typical_price_per_acre_ksh?: number | null;
+  combined_base_value?: number | null;
 }
 
 // ---- Model predictions + error-by-support (P5 wiring — known-gaps #49) ----
@@ -338,12 +507,16 @@ export interface ErrorBySupportRow {
   n_listings: number;
   oof_rmse: number;  // log scale
   oof_mae: number;   // log scale
+  /** P5b: ascending ordinal within the support_measure group. */
+  band_order: number;
 }
 
 /** GET /api/v1/model/error-by-support response. */
 export interface ErrorBySupportResponse {
   rows: ErrorBySupportRow[];
   n_rows: number;
+  /** P5b: the distinct groups with i18n label keys. */
+  support_measures: SupportMeasureOption[];
 }
 
 // ---- Data Explorer: price distribution (P-fidelity round) ----
@@ -374,6 +547,9 @@ export interface PriceDistributionResponse {
   n_usable: number;
   /** Listings whose data_quality_flag is true (excluded from training). */
   n_flagged: number;
+  /** P7b: the flag rule (percentile window) so the UI never re-types
+   *  "1st–99th". */
+  flag_definition: FlagDefinition | null;
 }
 
 // ---- Places (B4) ----
@@ -477,6 +653,79 @@ export interface ListingsScoredFilters {
   near_amenity?: NearAmenityFilter;
   radius_km?: AmenityRadiusKm;
   sort?: ListingsSortKey;
+  /** P4b: server-side sort direction ('asc' | 'desc'). */
+  order?: 'asc' | 'desc';
+}
+
+// ---- Deal Finder options + nearby (P4b) ----
+// Mirror of backend/app/schemas/listings_options.py — keep in sync.
+
+export interface ListingsPropertyTypeOption {
+  name: string;
+  n: number;
+}
+
+export interface ListingsCountyOption {
+  name: string;
+  n: number;
+}
+
+export interface VerdictRule {
+  basis: string | null;
+  match_rate: number | null;
+  under_ratio_max: number | null;
+  over_ratio_min: number | null;
+  interval_low_ref: string | null;
+  interval_high_ref: string | null;
+}
+
+export interface VerdictOption {
+  value: string;
+  label_key: string;
+  rule: VerdictRule;
+}
+
+export interface AmenityOption {
+  value: string;
+  label_key: string;
+}
+
+export interface SortKeyOption {
+  value: string;
+  label_key: string;
+  default_order: 'asc' | 'desc';
+}
+
+export interface ListingsOptionsResponse {
+  property_types: ListingsPropertyTypeOption[];
+  unmapped_prop_type_rows: number;
+  counties: ListingsCountyOption[];
+  verdicts: VerdictOption[];
+  amenities: AmenityOption[];
+  radii_km: number[];
+  amenity_filter_available: boolean;
+  page_sizes: number[];
+  default_page_size: number;
+  max_page_size: number;
+  sort_keys: SortKeyOption[];
+  export_max_rows: number | null;
+}
+
+export interface NearbyListing {
+  listing_no: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  verdict: string;
+  listed_price_per_acre_ksh: number;
+  distance_km: number;
+}
+
+export interface NearbyListingsResponse {
+  listing_no: string;
+  radius_km: number;
+  reason: string | null;
+  nearby: NearbyListing[];
+  n_returned: number;
 }
 
 // ---- Nearby POI category (B4) ----
@@ -489,3 +738,157 @@ export type NearbyPOICategory =
   | 'police'
   | 'bus_stop'
   | 'fuel';
+
+// ---- Overview summary (O1) ----
+// Mirror of backend/app/schemas/overview.py — every field name + nullability
+// matches the Pydantic schema verbatim.  Keep in sync.
+
+export interface OverviewPropertyTypeCount {
+  name: string;
+  n: number;
+}
+
+export interface OverviewFiltersBlock {
+  county: string | null;
+  prop_type: string | null;
+  property_types: OverviewPropertyTypeCount[];
+}
+
+export interface OverviewTotalsBlock {
+  n_listings: number;
+  n_flagged: number;
+  median_price_per_acre_ksh: number | null;
+  q1_price_per_acre_ksh: number | null;
+  q3_price_per_acre_ksh: number | null;
+  n_counties_with_data: number;
+  n_counties_meeting_threshold: number;
+}
+
+export interface OverviewVerdictsBlock {
+  underpriced: number;
+  fair: number;
+  overpriced: number;
+  n_unknown: number;
+  underpriced_share: number | null;
+  fair_share: number | null;
+  overpriced_share: number | null;
+  n_listings: number;
+}
+
+export interface OverviewPropertyTypeStat {
+  name: string;
+  n: number;
+  median_price_per_acre_ksh: number | null;
+  q1_price_per_acre_ksh: number | null;
+  q3_price_per_acre_ksh: number | null;
+}
+
+export interface OverviewByPropertyTypeBlock {
+  types: OverviewPropertyTypeStat[];
+  leader: string | null;
+  leader_premium_pct: number | null;
+}
+
+export interface OverviewSizeBand {
+  label: string;
+  lower_acres: number;
+  /** Null for the final open-ended band ('20+ ac'). */
+  upper_acres: number | null;
+  n: number;
+  median_price_per_acre_ksh: number | null;
+  low_support: boolean;
+}
+
+export interface OverviewBySizeBandBlock {
+  bands: OverviewSizeBand[];
+  /** National series, only present when a county filter is applied. */
+  comparison: OverviewSizeBand[] | null;
+  bulk_discount_pct: number | null;
+}
+
+export interface OverviewDistanceBand {
+  label: string;
+  lower_km: number;
+  /** Null for the final open-ended band ('400+ km'). */
+  upper_km: number | null;
+  n: number;
+  median_price_per_acre_ksh: number | null;
+  q1_price_per_acre_ksh: number | null;
+  q3_price_per_acre_ksh: number | null;
+  low_support: boolean;
+}
+
+export interface OverviewByDistanceBandBlock {
+  bands: OverviewDistanceBand[];
+}
+
+export interface OverviewTrendBlock {
+  slope: number | null;
+  intercept: number | null;
+  r2: number | null;
+  n: number;
+}
+
+export interface OverviewScatterPoint {
+  listing_no: string | null;
+  county: string | null;
+  distance_km: number | null;
+  price_per_acre_ksh: number;
+  verdict: string | null;
+}
+
+export interface OverviewScatterSampleBlock {
+  points: OverviewScatterPoint[];
+  n_total: number;
+  n_returned: number;
+  sample_limit: number;
+}
+
+export interface OverviewCountyStat {
+  county: string;
+  n: number;
+  median_price_per_acre_ksh: number | null;
+}
+
+export interface OverviewOthersBlock {
+  counties: string[];
+  n: number;
+  median_price_per_acre_ksh: number | null;
+}
+
+export interface OverviewCountiesBlock {
+  top: OverviewCountyStat[];
+  others: OverviewOthersBlock;
+  top_n: number;
+}
+
+export interface OverviewSummaryResponse {
+  filters: OverviewFiltersBlock;
+  property_types_canonical: string[];
+  /** Canonical size-band edges; the final edge is `null` (open tail). */
+  size_band_edges_acres: (number | null)[];
+  size_band_labels: string[];
+  /** Canonical distance-band edges; the final edge is `null` (open tail). */
+  distance_band_edges_km: (number | null)[];
+  distance_band_labels: string[];
+  unmapped_prop_type_rows: number;
+  totals: OverviewTotalsBlock;
+  national: OverviewTotalsBlock;
+  n_counties_total: number;
+  verdicts: OverviewVerdictsBlock;
+  by_property_type: OverviewByPropertyTypeBlock;
+  by_size_band: OverviewBySizeBandBlock;
+  by_distance_band: OverviewByDistanceBandBlock;
+  trend: OverviewTrendBlock;
+  scatter_sample: OverviewScatterSampleBlock;
+  counties: OverviewCountiesBlock;
+  generated_from: string | null;
+}
+
+/** Query params for GET /api/v1/overview/summary. */
+export interface OverviewSummaryFilters {
+  county?: string;
+  prop_type?: string;
+  top_n_counties?: number;
+  scatter_limit?: number;
+}

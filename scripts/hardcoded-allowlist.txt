@@ -1,0 +1,41 @@
+# Hardcoded-values allowlist — one entry per line, "regex,reason".
+# The regex is matched (via bash =~) against "$file $matched_text".
+# Add an entry when a violation is intentional — the reason must
+# explain why the literal is OK.
+#
+# Format: <bash regex>,<reason>
+#   (commas in the regex are not allowed — keep regexes simple)
+
+# Component-preview page intentionally uses mock showcase values.
+component-preview.*,Showcase tiles with mock counts (812, 118, 540, 154) — the page's purpose is to demo components with sample data
+component-preview.*,Showcase value (812 listings) — same as above
+
+# The canonical Nairobi reference constant lives in geo.py (skipped by
+# the scan) but may appear in docstrings elsewhere.
+Nairobi reference.*,Documented as the canonical default — the actual computation goes through the shared helper
+
+# The FX rate is now config-driven via /meta; the only literal left is
+# the fallback in format.ts (skipped by the scan) and the test fixtures.
+129,Test fixture or the typed fallback in format.ts (clearly marked as a fallback)
+
+# The "47 counties" / "23 of 47" copy is templated from /overview/summary
+# in the Overview page; this allowlist entry is for any remaining
+# docstring or comment that mentions the number.
+47 counties.*,Documented in comments — the runtime value comes from the boundaries service or the data fallback
+
+# Property-type labels in the Predictor / Deal Finder / Market Insights
+# feature folders are OPEN in the audit (deferred to a separate sweep).
+# Allow them for now with a clear reason; the audit doc lists them as
+# the next action.
+predictor/.*Residential|predictor/.*Industrial,OPEN in hardcoded-values-audit.md — deferred to a separate sweep (decision #3)
+deal-finder/.*Residential|deal-finder/.*Industrial,OPEN in hardcoded-values-audit.md — deferred to a separate sweep (decision #3)
+market-insights/.*Residential|market-insights/.*Industrial,OPEN in hardcoded-values-audit.md — deferred to a separate sweep (decision #3)
+
+# The /listings/scored default sort key (most-underpriced-first) is a
+# backend contract constant; the docs/api.md warning is the fix.
+listed_over_predicted.*,Backend sort key (contract constant, not data) — documented as a biased-sample footgun in docs/api.md
+
+# The min_county_n=10 fallback in counties.py + overview.py is OPEN in
+# the audit (decision #1) — kept as the manifest's documented default
+# pending the person's call on strict vs. practical behaviour.
+min_county_n = 10|min_county_n=10,OPEN in hardcoded-values-audit.md — manifest's documented default; pending decision on whether to surface null vs. ship the default

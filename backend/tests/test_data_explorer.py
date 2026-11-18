@@ -60,6 +60,34 @@ class TestPriceDistribution:
         expected = int(df["data_quality_flag"].astype(bool).sum())
         assert body["n_flagged"] == expected
 
+    def test_flag_definition_served_from_canonical_constants(self, app_with_exports, client):
+        """P7b: the flag rule comes from the canonical constants so the UI
+        can explain the flag without typing '1st-99th'."""
+        from app.schemas.canonical import FLAG_LOWER_PCT, FLAG_UPPER_PCT
+
+        resp = client.get("/api/v1/data/price-distribution")
+        body = resp.json()
+        fd = body["flag_definition"]
+        assert fd is not None
+        assert fd["lower_pct"] == FLAG_LOWER_PCT
+        assert fd["upper_pct"] == FLAG_UPPER_PCT
+
+    def test_flag_definition_served_in_degenerate_case(self, app, tmp_path):
+        """The empty-prices degenerate response still carries the flag rule."""
+        df = _tiny_listings_scored().copy()
+        df["listed_price_per_acre_ksh"] = float("nan")
+        _write_app_exports(tmp_path, {"listings_scored.parquet": df})
+        from app.services.app_exports import AppExportsRegistry
+
+        app.state.app_exports = AppExportsRegistry(artifacts_dir=str(tmp_path)).load()
+        from fastapi.testclient import TestClient
+
+        with TestClient(app) as client:
+            body = client.get("/api/v1/data/price-distribution").json()
+            assert body["flag_definition"] is not None
+            assert body["flag_definition"]["lower_pct"] == 1
+            assert body["flag_definition"]["upper_pct"] == 99
+
     def test_degraded_mode_returns_503(self, app, client):
         # ``app`` fixture has an empty ARTIFACTS_DIR — the parquet is missing
         resp = client.get("/api/v1/data/price-distribution")

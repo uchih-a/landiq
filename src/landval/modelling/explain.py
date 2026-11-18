@@ -50,6 +50,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from landval.modelling.coverage import TREE_MEMBERS, shap_coverage_from_weights
 from landval.modelling.registry import ModelRegistry
 
 # Cell 9.10 — the rule for turning a SHAP value into a money effect.
@@ -59,10 +60,9 @@ from landval.modelling.registry import ModelRegistry
 # Cell 9.4 — the log-scale ensemble is a weighted average, so the weighted
 # sum of member SHAP values explains the tree-model part of the ensemble
 # exactly; TabNet's share is not covered.
-
-# Tree models that shap.TreeExplainer supports.  TabNet is excluded by
-# construction — it's a neural net, not a tree model.
-TREE_MEMBERS = ("xgb", "catboost")
+#
+# TREE_MEMBERS is imported from landval.modelling.coverage (P6b) — the ONE
+# shared definition — and re-exported here for backwards compatibility.
 
 
 @dataclass
@@ -197,22 +197,23 @@ class LiveExplanationService:
         # reported as the unexplained share.
         combined_shap = np.zeros(len(feature_names), dtype=float)
         combined_base = 0.0
-        tree_share = 0.0
-        tabnet_share = 0.0
         explained_members: list[str] = []
-        unexplained_members: list[str] = []
 
         for member in self.registry.kept_members:
+            if member not in TREE_MEMBERS:
+                continue  # TabNet is not tree-based; shap.TreeExplainer cannot explain it.
             w = float(weights.get(member, 0.0))
-            if member in member_shap:
-                sv, base = member_shap[member]
-                combined_shap += w * sv
-                combined_base += w * base
-                tree_share += w
-                explained_members.append(member)
-            else:
-                tabnet_share += w
-                unexplained_members.append(member)
+            if member not in member_shap:
+                continue  # safety net — should not happen if registry loaded
+            sv, base = member_shap[member]
+            combined_shap += w * sv
+            combined_base += w * base
+            explained_members.append(member)
+
+        # ---- Shares via the ONE shared function (P6b): the same computation
+        # the registry reports and /model/explainability serves, so the three
+        # surfaces can never disagree. ----
+        coverage = shap_coverage_from_weights(self.registry.kept_members, weights)
 
         # ---- Money-effect rule (explain_spec.md, Cell 9.10) ----
         # effect(f) = exp(s_f) - 1
@@ -247,16 +248,31 @@ class LiveExplanationService:
 
         return LiveExplanationResult(
             drivers=top,
-            tree_share_explained_by_shap=round(tree_share, 6),
-            tabnet_share_not_covered=round(tabnet_share, 6),
+            tree_share_explained_by_shap=coverage["tree_share_explained_by_shap"],
+            tabnet_share_not_covered=coverage["tabnet_share_not_covered"],
             combined_base_value=round(combined_base, 6),
             typical_price_per_acre_ksh=typical_price,
             latency_ms=latency_ms,
-            explained_members=explained_members,
-            unexplained_members=unexplained_members,
+            explained_members=coverage["explained_members"],
+            unexplained_members=coverage["unexplained_members"],
         )
 
     # ------------------------------------------------------------------ priv
+    def member_base_value(self, member: str) -> float:
+        """The base (expected) value of one tree member — a constant of the
+        loaded model, independent of any input row.
+
+        Used by /model/explainability (P6b) to compute the load-time typical
+        price (``exp(sum of w_m * base_m)``) — the SAME value every /predict
+        response reports as ``coverage.typical_price_per_acre_ksh``, since
+        TreeExplainer's expected value does not depend on the request row.
+        Building the explainer is cached (first call only, a few ms).
+        """
+        if member not in TREE_MEMBERS:
+            raise ValueError(f"member {member!r} is not a tree member — no SHAP base value")
+        expl = self._get_explainer(member)
+        return float(np.asarray(expl.expected_value, float).ravel()[0])
+
     def _get_explainer(self, member: str) -> Any:
         """Build (once) and cache the TreeExplainer for ``member``.
 

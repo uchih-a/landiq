@@ -45,6 +45,7 @@ import tracemalloc
 from dataclasses import dataclass, field
 from typing import Any
 
+from landval.modelling.coverage import TREE_MEMBERS, shap_coverage_from_weights
 from landval.modelling.preprocessing import PipelinePreprocessor
 
 
@@ -340,10 +341,10 @@ class ModelRegistry:
         """Which loaded members are tree-based (shap.TreeExplainer can explain).
 
         TabNet is excluded by construction — it's a neural net, not a tree
-        model.  Returns the subset of ``kept_members`` that are in
-        ``("xgb", "catboost")``.
+        model.  Returns the subset of ``kept_members`` in
+        ``TREE_MEMBERS`` ("xgb", "catboost").
         """
-        return [m for m in self.kept_members if m in ("xgb", "catboost")]
+        return [m for m in self.kept_members if m in TREE_MEMBERS]
 
     def recomputed_shap_coverage(self) -> dict[str, Any]:
         """Recompute the SHAP-explained / unexplained shares from whichever
@@ -361,25 +362,20 @@ class ModelRegistry:
         SHAP values explain the entire ensemble.  When TabNet was kept, the
         tree share covers only its fraction; the TabNet fraction is the
         unexplained residual.
+
+        The computation itself lives in the ONE shared function
+        (``landval.modelling.coverage.shap_coverage_from_weights``, P6b) so
+        the registry, the live /predict coverage block and
+        /model/explainability can never drift apart; this method keeps
+        the registry's note.
         """
-        tree_share = 0.0
-        tabnet_share = 0.0
-        for member, w in self.kept_weights.items():
-            if member in ("xgb", "catboost"):
-                tree_share += float(w)
-            elif member == "tabnet":
-                tabnet_share += float(w)
-        return {
-            "tree_share_explained_by_shap": round(tree_share, 6),
-            "tabnet_share_not_covered": round(tabnet_share, 6),
-            "explained_members": self.tree_members_loaded,
-            "unexplained_members": [m for m in self.kept_members if m not in ("xgb", "catboost")],
-            "note": (
-                "recomputed from the loaded ensemble's renormalised weights "
-                "(serving_manifest.json, post-pruning); the manifest's "
-                "ensemble_shap_coverage records the pre-pruning values."
-            ),
-        }
+        cov = shap_coverage_from_weights(self.kept_members, self.kept_weights)
+        cov["note"] = (
+            "recomputed from the loaded ensemble's renormalised weights "
+            "(serving_manifest.json, post-pruning); the manifest's "
+            "ensemble_shap_coverage records the pre-pruning values."
+        )
+        return cov
 
     def load_report(self) -> dict[str, Any]:
         """A small JSON-friendly summary of what was loaded, for /meta or logs."""

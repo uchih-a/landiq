@@ -1,11 +1,15 @@
 /**
  * TriStatePill — a three-state Yes / No / Not Sure segmented control.
  *
- * Used for the predictor's infrastructure checklist (10 items) and for the
- * frontend-only Title Documentation field on the unsupported state. Maps
- * cleanly to the backend's `ChecklistValue = boolean | 'not_sure' | null`
- * (Yes → true, No → false, Not Sure → 'not_sure') via `triStateToChecklist`.
+ * Used for the predictor's infrastructure checklist.  Maps cleanly to
+ * the backend's `ChecklistValue = boolean | 'not_sure' | null` (Yes →
+ * true, No → false, Not Sure → 'not_sure') via `triStateToChecklist`.
+ *
+ * P2b: labels go through i18n (`predictor.triState.yes` / `.no` /
+ * `.unsure`).  Keyboard-operable via the radiogroup semantics.
  */
+import { useTranslation } from 'react-i18next';
+
 import type { TriState } from './predictor-helpers';
 
 interface TriStatePillProps {
@@ -14,34 +18,33 @@ interface TriStatePillProps {
   className?: string;
 }
 
-const OPTIONS: { v: TriState; label: string }[] = [
-  { v: 'yes', label: 'Yes' },
-  { v: 'no', label: 'No' },
-  { v: 'unsure', label: 'Not Sure' },
-];
+const OPTIONS: TriState[] = ['yes', 'no', 'unsure'];
 
 export function TriStatePill({ value, onChange, className = '' }: TriStatePillProps) {
+  const { t } = useTranslation();
   return (
     <div
       className={`inline-flex items-center rounded-full bg-surface-container-highest p-0.5 ${className}`}
       role="radiogroup"
     >
       {OPTIONS.map((o) => {
-        const active = value === o.v;
+        const active = value === o;
+        const label = t(`predictor.triState.${o}`);
         return (
           <button
-            key={o.v}
+            key={o}
             type="button"
             role="radio"
             aria-checked={active}
-            onClick={() => onChange(o.v)}
+            aria-label={label}
+            onClick={() => onChange(o)}
             className={`px-3 py-1 rounded-full text-caption-sm font-label-metric transition-colors duration-150 ${
               active
                 ? 'bg-surface-container-lowest text-on-surface shadow-sm'
                 : 'text-secondary hover:text-on-surface'
             }`}
           >
-            {o.label}
+            {label}
           </button>
         );
       })}

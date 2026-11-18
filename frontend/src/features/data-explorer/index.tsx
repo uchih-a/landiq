@@ -1,29 +1,33 @@
 /**
  * Data Explorer — data-quality tab (09_data_explorer_quality).
  *
- * NOTE ON PROVENANCE (fidelity round): this file was authored against a
- * source tree where the first P7 build was NOT present (data-explorer/
- * was still the F0 placeholder), so this is the first build shaped
- * directly by the web + m12 designs plus this update-to-design pass.
- *
- * Sections in design order:
- *   1. Header + five-pill tab group (only "Data quality" designed; other
- *      four tabs render a "Coming soon" panel). Tab lives in `?tab=`.
- *   2. Four stat tiles (Observed corpus / Modeling yield / County
- *      coverage / Sanitization).
- *   3. Missing values by feature (from /model/feature-evaluation).
- *   4. Price per acre distribution (from /data/price-distribution — the
- *      read-only backend endpoint this round added).
- *   5. Listings per county (from /counties/row_counts) with the ≥10
- *      threshold divider + hatched below-threshold bars.
- *   6. "Where the data comes from" — frame with "Not available yet"
- *      (provenance shares are not recorded anywhere the backend loads).
- *   7. Listings & Medians by County table (summary + row_counts merged).
- *   8. Mobile: sample-record cards replace the wide table below md.
- *   9. Footer disclaimer with real version/date from /meta.
+ * P7b (correctness + data-driven values; visuals unchanged):
+ *  - The min-county listing threshold comes from /meta's coverage block
+ *    ONLY. When it is null there is no `?? 10` fallback: threshold UI,
+ *    the "Model Ready / Not enough data" statuses, and the ready/not-ready
+ *    split all disappear and "threshold not available" is shown instead.
+ *  - Tab labels render from i18n; the four undesigned tabs render an
+ *    honest translated placeholder that names the endpoint each would
+ *    need. They look non-interactive (disabled pills) but stay reachable
+ *    by URL (?tab=...). The tab group is a proper tablist (roving
+ *    tabindex + arrow keys + aria-selected).
+ *  - The sanitization tile explains the flag from the response's
+ *    `flag_definition` (percentile window) — never a typed "1st–99th".
+ *  - Colour ramp + hatch colours come from the shared chart tokens; the
+ *    ramp cut-offs are named presentation constants.
+ *  - Percentile markers use the response values only; the bar-width
+ *    clamps below are VISUAL MINIMUMS (commented) so a tiny bar stays
+ *    visible without ever misrepresenting its count (the count is
+ *    always printed as text).
+ *  - Money goes through the shared currency-aware formatter (USD toggle
+ *    honoured; honest KSh display while no rate is configured); counts
+ *    format with the active locale (en-KE / sw-KE), never a typed one.
+ *  - Every card has loading / error+retry / empty states; a failure in
+ *    one query never blanks the page.
  */
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import {
   Bar,
   BarChart,
@@ -45,10 +49,20 @@ import {
   usePriceDistribution,
 } from '@/lib/api/hooks';
 import type { PriceBin } from '@/lib/api/types';
+import { formatCompactMoney, useCurrency } from '@/lib/currency/format';
+import { useFormatNumber } from '@/lib/i18n/useLocale';
+import { ordinal } from '@/lib/ordinal';
+import {
+  CHART_COLOR_OUTLINE,
+  CHART_COLOR_RAMP_DEEP,
+  CHART_COLOR_RAMP_LIGHT,
+  CHART_COLOR_RAMP_MID,
+  CHART_COLOR_RAMP_PALE,
+  PRICE_RAMP_CUTOFFS,
+} from '@/lib/ui/chart-tokens';
 
 import {
   TABS,
-  compactKSh,
   csvFromCountyRows,
   mergeCountyRows,
   normaliseTab,
@@ -62,25 +76,29 @@ import {
   SampleRecordsCard,
 } from './sections';
 
-const PAGE_SIZE = 10; // county table rows per page
+/** County table rows per page — display density, not a data fact. */
+const PAGE_SIZE = 10;
 
-
-function PriceTooltip({ active, payload }: {
+/** Which data powers the histogram tooltip + sr-only summary labels. */
+function PriceTooltip({ active, payload, nLabel }: {
   active?: boolean;
   payload?: Array<{ payload: { label: string; count: number } }>;
+  nLabel: (n: number) => string;
 }) {
   if (!active || !payload || payload.length === 0) return null;
   const p = payload[0].payload;
   return (
     <div className="rounded-DEFAULT bg-surface-container-lowest border border-black/[0.06] shadow-level-2 px-3 py-2">
       <div className="text-caption-sm text-secondary">{p.label}</div>
-      <div className="text-body-medium text-on-surface">{p.count} listings</div>
+      <div className="text-body-medium text-on-surface">{nLabel(p.count)}</div>
     </div>
   );
 }
 
 export default function DataExplorer() {
+  const { t } = useTranslation();
   const [searchParams, setSearchParams] = useSearchParams();
+  const formatNumber = useFormatNumber();
   const tab = normaliseTab(searchParams.get('tab'));
 
   function setTab(next: DataExplorerTab) {
@@ -105,7 +123,10 @@ export default function DataExplorer() {
   // Mobile sample records: first page of the scored listings feed.
   const listingsQ = useListingsScored({ page: 1, page_size: 6 });
 
-  const threshold = metaQ.data?.coverage?.min_county_n ?? 10;
+  // P7b-A: the real threshold ONLY — no `?? 10` fallback. Null means the
+  // backend cannot serve the coverage rules right now; every threshold
+  // UI then honestly reports "threshold not available".
+  const threshold = metaQ.data?.coverage?.min_county_n ?? null;
   const countyRows = useMemo(
     () => mergeCountyRows(summaryQ.data, rowCountsQ.data, threshold),
     [summaryQ.data, rowCountsQ.data, threshold],
@@ -114,22 +135,28 @@ export default function DataExplorer() {
   const [tablePage, setTablePage] = useState(1);
   const totalPages = Math.max(1, Math.ceil(countyRows.length / PAGE_SIZE));
   const pageRows = countyRows.slice((tablePage - 1) * PAGE_SIZE, tablePage * PAGE_SIZE);
-  const nModelReady = countyRows.filter((r) => r.modelReady).length;
+  const nModelReady =
+    threshold == null ? null : countyRows.filter((r) => r.modelReady === true).length;
 
   const missingRows = useMemo(
     () => rowsForMissing(featureEvalQ.data?.rows, explainQ.data?.feature_labels as never),
     [featureEvalQ.data, explainQ.data],
   );
-  const nUsable = rowCountsQ.data?.total_listings ?? priceDistQ.data?.n_usable;
+  const nUsable = rowCountsQ.data?.total_listings ?? priceDistQ.data?.n_usable ?? null;
+
+  // The flag rule from the response (price-distribution preferred, /meta
+  // fallback — both serve the same canonical window).
+  const flagDefinition = priceDistQ.data?.flag_definition ?? metaQ.data?.flag_definition ?? null;
 
   if (tab !== 'quality') {
+    const label = t(TABS.find((tt) => tt.id === tab)?.labelKey ?? 'de.tab.quality');
     return (
       <div className="flex flex-col gap-space-xl p-margin max-w-[1400px] mx-auto">
         <DataExplorerHeader tab={tab} onTab={setTab} />
         <EmptyState
           icon="construction"
-          title={`${TABS.find((t) => t.id === tab)?.label ?? tab} tab`}
-          message="This tab isn't designed yet. The Data quality tab has the full data-hygiene view."
+          title={t('de.tabSoonTitle', { tab: label })}
+          message={`${t('de.tabSoonQualityNote')} ${t(`de.tabSoon.${tab}`)}`}
         />
       </div>
     );
@@ -144,10 +171,14 @@ export default function DataExplorer() {
         nUsable={priceDistQ.data?.n_usable ?? rowCountsQ.data?.total_listings ?? null}
         nFlagged={priceDistQ.data?.n_flagged ?? null}
         nCountiesReady={
-          rowCountsQ.data
+          rowCountsQ.data && threshold != null
             ? rowCountsQ.data.counties.filter((c) => c.n_listings >= threshold).length
             : null
         }
+        nCountiesTotal={summaryQ.data?.n_counties_total ?? null}
+        threshold={threshold}
+        flagDefinition={flagDefinition}
+        formatNumber={formatNumber}
         isLoading={priceDistQ.isLoading || rowCountsQ.isLoading || metaQ.isLoading}
       />
 
@@ -203,8 +234,13 @@ export default function DataExplorer() {
           const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
           const url = URL.createObjectURL(blob);
           const a = document.createElement('a');
+          // P7b-J: the filename carries the dataset date from /meta when
+          // present — never a typed date literal.
+          const datePart = metaQ.data?.data_date
+            ? `-${metaQ.data.data_date.replace(/[^A-Za-z0-9_-]+/g, '-')}`
+            : '';
           a.href = url;
-          a.download = 'listings-and-medians-by-county.csv';
+          a.download = `listings-and-medians-by-county${datePart}.csv`;
           a.click();
           URL.revokeObjectURL(url);
         }}
@@ -221,11 +257,15 @@ export default function DataExplorer() {
       {/* ---- 9. Footer ---- */}
       <footer className="text-center px-space-xs pt-space-xl pb-4">
         <p className="text-caption-sm text-secondary opacity-80 leading-relaxed">
-          Statistical estimate, not an official valuation. Map data © OpenStreetMap contributors.
+          {t('de.footer.disclaimer')}
         </p>
         <p className="text-caption-sm text-secondary opacity-70 leading-relaxed mt-0.5">
-          {metaQ.data?.model_version ?? 'Model version unavailable'} — dataset snapshot{' '}
-          {metaQ.data?.data_date ?? 'unavailable'}
+          {metaQ.data?.model_version || metaQ.data?.data_date
+            ? t('de.footer.meta', {
+                version: metaQ.data?.model_version ?? t('de.footer.versionUnavailable'),
+                date: metaQ.data?.data_date ?? t('de.footer.dateUnavailable'),
+              })
+            : `${t('de.footer.versionUnavailable')} — dataset snapshot ${t('de.footer.dateUnavailable')}`}
         </p>
       </footer>
     </div>
@@ -233,7 +273,7 @@ export default function DataExplorer() {
 }
 
 // ----------------------------------------------------------------------
-// 1. Header + tabs
+// 1. Header + tabs (a proper tablist)
 // ----------------------------------------------------------------------
 
 function DataExplorerHeader({
@@ -243,40 +283,100 @@ function DataExplorerHeader({
   tab: DataExplorerTab;
   onTab: (t: DataExplorerTab) => void;
 }) {
+  const { t } = useTranslation();
+  const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
+
+  // Roving tabindex + arrow-key navigation across the ENABLED tabs (the
+  // four undesigned tabs are disabled pills — see below). With a single
+  // enabled tab this is a no-op, but the wiring is here so the tablist
+  // stays correct the moment those tabs get designs.
+  function onKeyDown(e: React.KeyboardEvent<HTMLButtonElement>) {
+    const enabled = TABS.filter((tt) => tt.designed);
+    if (enabled.length < 2) return;
+    const idx = tabRefs.current.findIndex((el) => el === e.currentTarget);
+    if (idx === -1) return;
+    let next = -1;
+    if (e.key === 'ArrowRight') next = (idx + 1) % enabled.length;
+    if (e.key === 'ArrowLeft') next = (idx - 1 + enabled.length) % enabled.length;
+    if (e.key === 'Home') next = 0;
+    if (e.key === 'End') next = enabled.length - 1;
+    if (next >= 0) {
+      e.preventDefault();
+      tabRefs.current[next]?.focus();
+    }
+  }
+
   return (
     <header className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-space-md pt-2">
       <div className="flex flex-col gap-1">
         <div className="flex items-center gap-2">
           <span className="w-2 h-2 rounded-full bg-primary-container" />
           <span className="font-label-uppercase text-label-uppercase text-secondary tracking-widest uppercase">
-            Corpus Diagnostics &amp; Data Hygiene
+            {t('de.eyebrow')}
           </span>
         </div>
         <h1 className="font-headline-page text-headline-page-mobile md:text-headline-page text-on-surface tracking-tight font-light">
-          Data Explorer
+          {t('de.title')}
         </h1>
         <p className="font-body-regular text-body-regular text-secondary">
-          Look at the listings data behind the estimates.
+          {t('de.subtitle')}
         </p>
       </div>
-      {/* Five-pill tab group — horizontally scrollable on mobile per m12. */}
+      {/* Five-pill tab group — horizontally scrollable on mobile per m12.
+          A proper tablist: role=tab + aria-selected + roving tabindex +
+          arrow keys on the enabled tabs. The four undesigned tabs are
+          DISABLED pills (non-interactive-looking — P7b-C) that stay
+          reachable via ?tab= in the URL; their tooltip carries the
+          honest "why". */}
       <div className="w-full lg:w-auto overflow-x-auto -mx-margin-mobile px-margin-mobile lg:mx-0 lg:px-0 py-1">
-        <div className="flex items-center bg-surface-container-high/70 p-1 rounded-full shadow-xs min-w-max">
-          {TABS.map((t) => {
-            const active = t.id === tab;
+        <div
+          role="tablist"
+          aria-label={t('de.tabsA11y')}
+          className="flex items-center bg-surface-container-high/70 p-1 rounded-full shadow-xs min-w-max"
+        >
+          {TABS.map((tt, i) => {
+            const active = tt.id === tab;
+            const soonKey = `de.tabSoon.${tt.id}` as const;
+            if (!tt.designed) {
+              return (
+                <button
+                  key={tt.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  aria-disabled="true"
+                  disabled
+                  title={t(soonKey)}
+                  tabIndex={-1}
+                  className={`h-9 lg:h-auto px-4 py-1.5 rounded-full font-body-medium text-[12px] whitespace-nowrap cursor-not-allowed ${
+                    active
+                      ? 'bg-surface-container-high text-secondary'
+                      : 'text-secondary/50'
+                  }`}
+                >
+                  {t(tt.labelKey)}
+                </button>
+              );
+            }
             return (
               <button
-                key={t.id}
+                key={tt.id}
                 type="button"
-                onClick={() => onTab(t.id)}
-                aria-pressed={active}
+                role="tab"
+                aria-selected={active}
+                tabIndex={active ? 0 : -1}
+                ref={(el) => {
+                  tabRefs.current[i] = el;
+                }}
+                onKeyDown={onKeyDown}
+                onClick={() => onTab(tt.id)}
                 className={`h-9 lg:h-auto px-4 py-1.5 rounded-full font-body-medium text-[12px] whitespace-nowrap transition-all ${
                   active
                     ? 'bg-inverse-surface text-inverse-on-surface shadow-sm'
                     : 'text-secondary hover:text-on-surface'
                 }`}
               >
-                {t.label}
+                {t(tt.labelKey)}
               </button>
             );
           })}
@@ -294,10 +394,25 @@ interface StatTilesProps {
   nUsable: number | null;
   nFlagged: number | null;
   nCountiesReady: number | null;
+  /** Total counties from the boundaries/summary response (never typed). */
+  nCountiesTotal: number | null;
+  threshold: number | null;
+  flagDefinition: { lower_pct: number; upper_pct: number } | null;
+  formatNumber: (n: number) => string;
   isLoading: boolean;
 }
 
-function StatTiles({ nUsable, nFlagged, nCountiesReady, isLoading }: StatTilesProps) {
+function StatTiles({
+  nUsable,
+  nFlagged,
+  nCountiesReady,
+  nCountiesTotal,
+  threshold,
+  flagDefinition,
+  formatNumber,
+  isLoading,
+}: StatTilesProps) {
+  const { t } = useTranslation();
   if (isLoading) {
     return (
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-gutter">
@@ -320,15 +435,17 @@ function StatTiles({ nUsable, nFlagged, nCountiesReady, isLoading }: StatTilesPr
       <div className="rounded-lg bg-surface-container-lowest p-space-md shadow-sm flex flex-col justify-between">
         <div className="flex items-center justify-between mb-2">
           <span className="font-label-uppercase text-label-uppercase text-secondary uppercase tracking-wider">
-            Observed Corpus
+            {t('de.tile.corpus.label')}
           </span>
           <span className="material-symbols-outlined text-[20px] text-secondary">inventory_2</span>
         </div>
         <div>
           <div className="font-display-kpi text-display-kpi text-on-surface leading-none mb-1 opacity-40">—</div>
-          <div className="font-body-medium text-body-medium text-on-surface">listings collected</div>
+          <div className="font-body-medium text-body-medium text-on-surface">
+            {t('de.tile.corpus.value')}
+          </div>
           <div className="font-caption-sm text-caption-sm text-secondary mt-0.5">
-            Not available yet — raw pre-cleaning count is not exposed by the API
+            {t('de.tile.corpus.unavailable')}
           </div>
         </div>
       </div>
@@ -338,56 +455,80 @@ function StatTiles({ nUsable, nFlagged, nCountiesReady, isLoading }: StatTilesPr
       <div className="rounded-lg bg-surface-container-lowest p-space-md shadow-sm flex flex-col justify-between">
         <div className="flex items-center justify-between mb-2">
           <span className="font-label-uppercase text-label-uppercase text-primary tracking-wider uppercase">
-            Modeling Yield
+            {t('de.tile.yield.label')}
           </span>
           <span className="material-symbols-outlined text-[20px] text-primary-container">check_circle</span>
         </div>
         <div>
           <div className="font-display-kpi text-display-kpi text-primary-container leading-none mb-1">
-            {nUsable != null ? nUsable.toLocaleString('en-KE') : '—'}
+            {nUsable != null ? formatNumber(nUsable) : '—'}
           </div>
-          <div className="font-body-medium text-body-medium text-on-surface">usable (price and size valid)</div>
+          <div className="font-body-medium text-body-medium text-on-surface">
+            {t('de.tile.yield.value')}
+          </div>
           <div className="font-caption-sm text-caption-sm text-secondary mt-0.5">
-            Yield rate needs the raw collected count — not available yet
+            {t('de.tile.yield.unavailable')}
           </div>
         </div>
       </div>
 
-      {/* County coverage */}
+      {/* County coverage — threshold badge + "of N" follow the response;
+          null threshold hides the quorum claim entirely. */}
       <div className="rounded-lg bg-surface-container-lowest p-space-md shadow-sm flex flex-col justify-between">
         {/* flex-wrap so the threshold badge drops under the label on narrow
             2-col mobile tiles instead of overflowing the tile edge. */}
         <div className="flex flex-wrap items-center gap-1.5 mb-2">
           <span className="font-label-uppercase text-label-uppercase text-secondary uppercase tracking-wider">
-            County Coverage
+            {t('de.tile.coverage.label')}
           </span>
-          <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-secondary-fixed text-on-secondary-fixed-variant font-caption-sm text-caption-sm font-medium">
-            ≥ 10 listings threshold
-          </span>
+          {threshold != null && (
+            <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-secondary-fixed text-on-secondary-fixed-variant font-caption-sm text-caption-sm font-medium">
+              {t('de.tile.coverage.badge', { threshold })}
+            </span>
+          )}
         </div>
         <div>
           <div className="font-display-kpi text-display-kpi text-on-surface leading-none mb-1">
             {nCountiesReady != null ? nCountiesReady : '—'}
+            {nCountiesReady != null && nCountiesTotal != null && (
+              <span className="font-label-metric text-label-metric text-secondary ml-1.5">
+                {t('de.tile.coverage.ofTotal', { total: formatNumber(nCountiesTotal) })}
+              </span>
+            )}
           </div>
-          <div className="font-body-medium text-body-medium text-on-surface">counties with enough data</div>
-          <div className="font-caption-sm text-caption-sm text-secondary mt-0.5">Meets modeling quorum</div>
+          <div className="font-body-medium text-body-medium text-on-surface">
+            {t('de.tile.coverage.value')}
+          </div>
+          <div className="font-caption-sm text-caption-sm text-secondary mt-0.5">
+            {threshold != null ? t('de.tile.coverage.caption') : t('de.tile.coverage.thresholdUnavailable')}
+          </div>
         </div>
       </div>
 
-      {/* Sanitization — red accent; count is the real flagged count. */}
+      {/* Sanitization — red accent; count is the real flagged count, and
+          the caption explains the flag from flag_definition. */}
       <div className="rounded-lg bg-surface-container-lowest p-space-md shadow-sm flex flex-col justify-between">
         <div className="flex items-center justify-between mb-2">
           <span className="font-label-uppercase text-label-uppercase text-error uppercase tracking-wider">
-            Sanitization
+            {t('de.tile.sanitization.label')}
           </span>
           <span className="material-symbols-outlined text-[20px] text-primary-container">flag</span>
         </div>
         <div>
           <div className="font-display-kpi text-display-kpi text-on-surface leading-none mb-1">
-            {nFlagged != null ? nFlagged.toLocaleString('en-KE') : '—'}
+            {nFlagged != null ? formatNumber(nFlagged) : '—'}
           </div>
-          <div className="font-body-medium text-body-medium text-on-surface">flagged as possible errors</div>
-          <div className="font-caption-sm text-caption-sm text-secondary mt-0.5">Excluded from model training</div>
+          <div className="font-body-medium text-body-medium text-on-surface">
+            {t('de.tile.sanitization.value')}
+          </div>
+          <div className="font-caption-sm text-caption-sm text-secondary mt-0.5">
+            {flagDefinition != null
+              ? t('de.tile.sanitization.flagRule', {
+                  lower: ordinal(flagDefinition.lower_pct),
+                  upper: ordinal(flagDefinition.upper_pct),
+                })
+              : t('de.tile.sanitization.caption')}
+          </div>
         </div>
       </div>
     </div>
@@ -406,25 +547,27 @@ function MissingValuesCard({
   onRetry,
 }: {
   rows: ReturnType<typeof rowsForMissing>;
-  nUsable: number | undefined;
+  nUsable: number | null;
   isLoading: boolean;
   isError: boolean;
   onRetry: () => void;
 }) {
+  const { t } = useTranslation();
+  const formatNumber = useFormatNumber();
   const worst = rows[0];
   return (
     <ValuationCard noPadding>
       <div className="p-space-lg">
         <div className="flex items-center justify-between mb-1">
           <h2 className="font-headline-section text-headline-section text-on-surface font-medium">
-            Missing values by feature
+            {t('de.missing.title')}
           </h2>
           <span className="font-label-metric text-label-metric text-secondary">
-            {nUsable != null ? `N = ${nUsable.toLocaleString('en-KE')} usable` : ''}
+            {nUsable != null ? t('de.missing.nUsable', { n: formatNumber(nUsable) }) : ''}
           </span>
         </div>
         <p className="font-body-regular text-body-regular text-secondary mb-space-md">
-          Completeness across the usable listings in the model training set
+          {t('de.missing.subtitle')}
         </p>
 
         {isLoading ? (
@@ -432,36 +575,36 @@ function MissingValuesCard({
         ) : isError ? (
           <EmptyState
             icon="cloud_off"
-            title="Couldn't load feature evaluation"
-            message="The feature-evaluation feed is unavailable."
-            actionLabel="Retry"
+            title={t('de.missing.errorTitle')}
+            message={t('de.missing.errorMessage')}
+            actionLabel={t('common.retry')}
             onAction={onRetry}
           />
         ) : rows.length === 0 ? (
           <EmptyState
             icon="rule"
-            title="No feature evaluation data"
-            message="Feature completeness is not available right now."
+            title={t('de.missing.emptyTitle')}
+            message={t('de.missing.emptyMessage')}
           />
         ) : (
           <div className="flex flex-col gap-space-sm">
+            {/* P7b-B: one plain style for every row — the old orange
+                "severe" accent was driven by a typed 50% threshold with no
+                backend notion behind it, so it was removed. Percentages
+                are `missing_pct` unmodified; `excluded` comes from
+                in_selected_set. */}
             {rows.map((r) => (
               <div key={r.feature} className="flex flex-col gap-1">
                 <div className="flex justify-between items-center font-body-medium text-body-medium">
-                  <span className={`truncate ${r.severe ? 'text-on-surface font-medium' : 'text-on-surface font-medium'}`}>
-                    {r.feature}
-                  </span>
+                  <span className="truncate text-on-surface font-medium">{r.feature}</span>
                   {r.missingPct <= 0 ? (
                     <span className="text-tertiary font-semibold flex items-center gap-1 whitespace-nowrap">
-                      <span className="material-symbols-outlined text-[14px]">check</span> 0% missing
+                      <span className="material-symbols-outlined text-[14px]">check</span>{' '}
+                      {t('de.missing.zero')}
                     </span>
                   ) : (
-                    <span
-                      className={`whitespace-nowrap ${
-                        r.severe ? 'text-primary-container font-semibold' : 'text-secondary font-medium'
-                      }`}
-                    >
-                      {r.missingPct.toFixed(0)}% missing
+                    <span className="whitespace-nowrap text-secondary font-medium">
+                      {t('de.missing.pct', { pct: r.missingPct.toFixed(0) })}
                     </span>
                   )}
                 </div>
@@ -469,25 +612,19 @@ function MissingValuesCard({
                   <div className="h-2 w-full bg-tertiary/20 rounded-full overflow-hidden">
                     <div className="h-full w-full bg-tertiary rounded-full" />
                   </div>
-                ) : r.severe ? (
-                  /* Worst feature: full orange bar. */
-                  <div className="h-4 w-full bg-surface-container rounded-full overflow-hidden p-0.5">
-                    <div
-                      className="h-full rounded-full bg-primary-container"
-                      style={{ width: `${Math.min(100, r.missingPct)}%` }}
-                    />
-                  </div>
                 ) : (
-                  /* Muted rows: hatched proportion (P1 hatch approach, as a
-                     CSS repeating-linear-gradient). */
                   <div className="h-3 w-full bg-surface-container rounded-full overflow-hidden">
                     <div
                       className="h-full rounded-full"
                       style={{
+                        // VISUAL MINIMUM WIDTH ONLY (P7b-E): a nonzero
+                        // missingness must stay visible as a sliver; the
+                        // percentage is printed as text, so the clamp can
+                        // never misrepresent the value.
                         width: `${Math.max(2, Math.min(100, r.missingPct))}%`,
-                        backgroundImage:
-                          'repeating-linear-gradient(45deg, #e8742a 0, #e8742a 2.5px, transparent 2.5px, transparent 8px)',
+                        backgroundImage: `repeating-linear-gradient(45deg, ${CHART_COLOR_RAMP_MID} 0, ${CHART_COLOR_RAMP_MID} 2.5px, transparent 2.5px, transparent 8px)`,
                       }}
+                      aria-hidden="true"
                     />
                   </div>
                 )}
@@ -501,8 +638,10 @@ function MissingValuesCard({
               <div className="flex items-center gap-1.5 mt-2 text-secondary">
                 <span className="material-symbols-outlined text-[14px] text-primary-container">info</span>
                 <span className="font-caption-sm text-caption-sm">
-                  {worst.missingPct.toFixed(0)}% missing — {worst.feature} is excluded from the primary
-                  ensemble models
+                  {t('de.missing.excluded', {
+                    pct: worst.missingPct.toFixed(0),
+                    feature: worst.feature,
+                  })}
                 </span>
               </div>
             )}
@@ -523,6 +662,9 @@ function logPos(value: number, bins: PriceBin[]): number {
   const lo = Math.log10(bins[0].lower_ksh);
   const hi = Math.log10(bins[bins.length - 1].upper_ksh);
   if (hi <= lo) return 50;
+  // Clamp keeps the marker inside the plot area when a percentile sits
+  // outside the clipped bin range — a visual bound only; the printed
+  // value is exact.
   return Math.max(0, Math.min(100, ((Math.log10(value) - lo) / (hi - lo)) * 100));
 }
 
@@ -531,24 +673,28 @@ function PriceDistributionCard({
   nUsable,
 }: {
   query: ReturnType<typeof usePriceDistribution>;
-  nUsable: number | undefined;
+  nUsable: number | null;
 }) {
+  const { t } = useTranslation();
+  const formatNumber = useFormatNumber();
+  const { currency } = useCurrency();
   const { data, isLoading, isError, refetch } = query;
   const bins: PriceBin[] = data?.bins ?? [];
   const maxCount = Math.max(1, ...bins.map((b) => b.count));
 
-  // Bin colour ramps from pale (#dec1b3) through #ffb68f / #e8742a to
-  // #9d4400 as the bin approaches the modal height — per the design.
+  // Bin colour ramp (P7b-D): the cut-offs are the named presentation
+  // constants from chart-tokens (display choice, not a data fact); the
+  // colours are the single-sourced design tokens.
   function barFill(count: number): string {
     const rel = count / maxCount;
-    if (rel <= 0.05) return '#dec1b3';
-    if (rel <= 0.2) return '#ffb68f';
-    if (rel <= 0.45) return '#e8742a';
-    return '#9d4400';
+    if (rel <= PRICE_RAMP_CUTOFFS.pale) return CHART_COLOR_RAMP_PALE;
+    if (rel <= PRICE_RAMP_CUTOFFS.light) return CHART_COLOR_RAMP_LIGHT;
+    if (rel <= PRICE_RAMP_CUTOFFS.mid) return CHART_COLOR_RAMP_MID;
+    return CHART_COLOR_RAMP_DEEP;
   }
 
   const chartData = bins.map((b) => ({
-    label: `${compactKSh(b.lower_ksh)} – ${compactKSh(b.upper_ksh)}`,
+    label: `${formatCompactMoney(b.lower_ksh, currency)} – ${formatCompactMoney(b.upper_ksh, currency)}`,
     count: b.count,
     fill: barFill(b.count),
   }));
@@ -560,13 +706,12 @@ function PriceDistributionCard({
       <div className="p-space-lg">
         <div className="flex items-center justify-between mb-1">
           <h2 className="font-headline-section text-headline-section text-on-surface font-medium">
-            Price per acre distribution
+            {t('de.price.title')}
           </h2>
-          <span className="font-label-metric text-label-metric text-secondary">Log10 Scale</span>
+          <span className="font-label-metric text-label-metric text-secondary">{t('de.price.scale')}</span>
         </div>
         <p className="font-body-regular text-body-regular text-secondary mb-4">
-          Log-scale histogram of asking prices across all{' '}
-          {nUsable != null ? nUsable.toLocaleString('en-KE') : '—'} usable listings
+          {t('de.price.subtitle', { n: nUsable != null ? formatNumber(nUsable) : '—' })}
         </p>
 
         {isLoading ? (
@@ -574,16 +719,16 @@ function PriceDistributionCard({
         ) : isError ? (
           <EmptyState
             icon="cloud_off"
-            title="Couldn't load price distribution"
-            message="The price-distribution feed is unavailable."
-            actionLabel="Retry"
+            title={t('de.price.errorTitle')}
+            message={t('de.price.errorMessage')}
+            actionLabel={t('common.retry')}
             onAction={() => refetch()}
           />
         ) : bins.length === 0 ? (
           <EmptyState
             icon="bar_chart"
-            title="No usable prices"
-            message="There are no usable per-acre prices to chart."
+            title={t('de.price.emptyTitle')}
+            message={t('de.price.emptyMessage')}
           />
         ) : (
           <>
@@ -591,14 +736,15 @@ function PriceDistributionCard({
               {bins.length > 1 && p && (
                 <>
                   {/* p1 / p99 dashed reference lines (design) — positioned on
-                      the same log10 axis as the median pill. */}
+                      the same log10 axis as the median pill, from the response
+                      values only (never fixed positions). */}
                   {[p.p1, p.p99].map((v) => (
                     <div
                       key={v}
                       className="absolute top-0 bottom-0 w-px pointer-events-none"
                       style={{
                         left: `${logPos(v, bins)}%`,
-                        borderLeft: '1.5px dashed #8a7266',
+                        borderLeft: `1.5px dashed ${CHART_COLOR_OUTLINE}`,
                       }}
                     />
                   ))}
@@ -608,7 +754,10 @@ function PriceDistributionCard({
                 <BarChart data={chartData} margin={{ top: 24, right: 4, bottom: 0, left: 4 }}>
                   <XAxis dataKey="label" hide />
                   <YAxis hide />
-                  <Tooltip content={<PriceTooltip />} cursor={{ fill: 'rgba(27,21,18,0.04)' }} />
+                  <Tooltip
+                    content={<PriceTooltip nLabel={(n) => t('de.price.tooltipListings', { count: formatNumber(n) })} />}
+                    cursor={{ fill: 'rgba(27,21,18,0.04)' }}
+                  />
                   <Bar dataKey="count" radius={[3, 3, 0, 0]} isAnimationActive={false}>
                     {chartData.map((d, i) => (
                       <Cell key={i} fill={d.fill} />
@@ -623,46 +772,59 @@ function PriceDistributionCard({
                   style={{ left: `${logPos(p.p50, bins)}%` }}
                 >
                   <span className="w-1.5 h-1.5 rounded-full bg-primary-container" />
-                  <span className="font-label-metric text-[12px] font-medium">Median {compactKSh(p.p50)}</span>
+                  <span className="font-label-metric text-[12px] font-medium">
+                    {t('de.price.median', { value: formatCompactMoney(p.p50, currency) })}
+                  </span>
                 </div>
               )}
+              {/* Hidden text alternative for the histogram (P7b-L): n,
+                  median, and the middle 80% as text. */}
+              <p className="sr-only">
+                {p &&
+                  t('de.price.a11ySummary', {
+                    n: formatNumber(nUsable ?? 0),
+                    median: formatCompactMoney(p.p50, currency),
+                    p10: formatCompactMoney(p.p10, currency),
+                    p90: formatCompactMoney(p.p90, currency),
+                  })}
+              </p>
             </div>
             {/* Percentile chips: p1/p50/p99 on web (p10/p50/p90 on mobile). */}
             {p && (
               <>
                 <div className="hidden md:grid grid-cols-3 gap-2 py-1">
-                  <PctTile label="p1 (1% low)" value={compactKSh(p.p1)} />
-                  <PctTile label="Median (p50)" value={compactKSh(p.p50)} highlight />
-                  <PctTile label="p99 (99% high)" value={compactKSh(p.p99)} />
+                  <PctTile label={t('de.price.p1')} value={formatCompactMoney(p.p1, currency)} />
+                  <PctTile label={t('de.price.p50')} value={formatCompactMoney(p.p50, currency)} highlight />
+                  <PctTile label={t('de.price.p99')} value={formatCompactMoney(p.p99, currency)} />
                 </div>
                 <div className="grid md:hidden grid-cols-3 gap-2 py-1">
-                  <PctTile label="p10 Lowest" value={compactKSh(p.p10)} />
-                  <PctTile label="Median p50" value={compactKSh(p.p50)} highlight />
-                  <PctTile label="p90 Highest" value={compactKSh(p.p90)} />
+                  <PctTile label={t('de.price.p10')} value={formatCompactMoney(p.p10, currency)} />
+                  <PctTile label={t('de.price.p50')} value={formatCompactMoney(p.p50, currency)} highlight />
+                  <PctTile label={t('de.price.p90')} value={formatCompactMoney(p.p90, currency)} />
                 </div>
               </>
             )}
             {/* Axis ticks on the log scale. */}
             {bins.length > 1 && (
               <div className="flex justify-between items-center text-secondary font-label-metric text-[12px] pt-2 px-1">
-                <span>{compactKSh(bins[0].lower_ksh)}</span>
-                <span>{compactKSh(bins[Math.floor(bins.length / 2)].lower_ksh)}</span>
-                <span>{compactKSh(bins[bins.length - 1].upper_ksh)}</span>
+                <span>{formatCompactMoney(bins[0].lower_ksh, currency)}</span>
+                <span>{formatCompactMoney(bins[Math.floor(bins.length / 2)].lower_ksh, currency)}</span>
+                <span>{formatCompactMoney(bins[bins.length - 1].upper_ksh, currency)}</span>
               </div>
             )}
           </>
         )}
 
-        {/* Explanatory note — only the generic sentence; the design's
-            "middle 80% between KSh X and Y" numbers would need real p10/p90
-            values inserted, which we do when percentiles exist. */}
+        {/* Explanatory note — the middle-80% numbers interpolate the real
+            p10/p90 response values. */}
         {p && (
           <div className="mt-4 p-3 rounded bg-surface-container-low flex items-start gap-2">
             <span className="material-symbols-outlined text-primary-container text-[18px] shrink-0 mt-0.5">analytics</span>
             <p className="font-caption-sm text-caption-sm text-on-surface-variant">
-              The middle 80% of properties reside between {compactKSh(p.p10)} and {compactKSh(p.p90)}{' '}
-              per acre. Applying a logarithmic transformation yields near-normal symmetry, stabilizing
-              subsequent predictive estimators.
+              {t('de.price.middle80', {
+                low: formatCompactMoney(p.p10, currency),
+                high: formatCompactMoney(p.p90, currency),
+              })}
             </p>
           </div>
         )}

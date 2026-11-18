@@ -10,8 +10,6 @@ export interface NavItem {
 export interface RailItem {
   label: string;
   icon: string;
-  /** Whether this rail button shows a notification dot (e.g. Notifications) */
-  hasDot?: boolean;
 }
 
 /**
@@ -80,7 +78,10 @@ export const MOBILE_DOCK_ITEMS: NavItem[] = [
 // rail respectively, matching the design's 01_overview/02_predictor code.html.
 export const RAIL_ITEMS_TOP: RailItem[] = [
   { label: 'Fullscreen View', icon: 'fullscreen' },
-  { label: 'Notifications', icon: 'notifications', hasDot: true },
+  // P8b-M: no permanent notification-dot decoration — a dot that implies
+  // a notification exists would be a fake state.  The bell is a plain
+  // affordance until there is something real to surface.
+  { label: 'Notifications', icon: 'notifications' },
   { label: 'Knowledge Base', icon: 'help' },
 ];
 

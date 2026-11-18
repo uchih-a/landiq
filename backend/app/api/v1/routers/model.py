@@ -28,6 +28,14 @@ Explainability:
       importances for all three models, and the plain-English feature
       labels.  Per-listing SHAP is out of scope here; see B2's predict
       endpoint and the SHAP-in-scope note in the B2 final report.
+      P6b additions: the ensemble ``models`` list + ``default_model`` (so
+      the bars card is model-driven, never keyed to a hard-coded 'xgb');
+      the ``ensemble_shap_coverage`` block is normalised to fractions,
+      recomputed from the loaded ensemble's weights when the model
+      registry is up (``source: "recomputed"``) and only falling back to
+      the notebook-time manifest (``source: "manifest"``); and the
+      load-time ``typical_price_per_acre_ksh`` / ``combined_base_value``
+      when the explanation service is available.
 
 All endpoints return 503 ``DATA_UNAVAILABLE`` (not 500) when their
 source file is missing.
@@ -57,7 +65,27 @@ from app.schemas.predictions import (
     ErrorBySupportRow,
     ModelPredictionsResponse,
     PredictionRow,
+    SupportMeasureOption,
 )
+from app.services.explainability import (
+    build_coverage_block,
+    build_models_list,
+    compute_typical_price,
+)
+
+
+def _band_sort_key(band: str) -> tuple[int, int]:
+    r"""Sort key for band labels: the leading number in the label ("\<5"
+    -> 5, "10-19" -> 10, "50+" -> 50); labels without a number sort last.
+    A "\<N" band sorts before the "N-..." band that shares its number
+    (the "\<10" band is BELOW the 10-19 band)."""
+    import re as _re
+
+    m = _re.search(r"\d+", band)
+    num = int(m.group()) if m else 10**9
+    lt = 0 if band.lstrip().startswith("<") else 1
+    return (num, lt)
+
 
 router = APIRouter(tags=["model"])
 
@@ -91,7 +119,17 @@ def _maybe_float(v: Any) -> float | None:
 
 @router.get("/model/metrics", response_model=MetricsResponse)
 async def model_metrics(request: Request) -> MetricsResponse:
-    """CV + test metrics with bootstrap CIs, ensemble weights, interval coverage."""
+    """CV + test metrics with bootstrap CIs, ensemble weights, interval coverage.
+
+    P5b additions: ``ensemble_model`` (the production run's ensemble row,
+    identified by the backend — the frontend resolves the row by this
+    value only, no substring heuristics), ``production_run_label``,
+    ``interval_levels`` (derived from the data — see the schema),
+    ``default_interval_level``, ``interval_method`` (documented backend
+    constant), ``n_test`` / ``n_dev`` (row counts of the loaded
+    prediction parquets), and ``model_info`` (per-model display_name +
+    family from the backend's documented registry mapping).
+    """
     app_exports = request.app.state.app_exports
     table_df = app_exports.require("metrics_table_df", "metrics_table.csv")
     metrics_json = app_exports.require("metrics_json", "metrics.json")
@@ -100,16 +138,84 @@ async def model_metrics(request: Request) -> MetricsResponse:
     n_runs = int(table_df["run"].nunique()) if "run" in table_df.columns else 0
     n_models_per_run = int(len(table_df) // max(n_runs, 1))
 
+    production_run = str(metrics_json.get("production_run", ""))
+
+    # ---- ensemble_model: the production run's weighted_ensemble row (P5b).
+    # Identified by the backend — the frontend matches table rows by this
+    # value only.  Null when the production run has no weighted_ensemble
+    # row (the frontend then shows "not available", no fallbacks). ----
+    ensemble_model: str | None = None
+    prod_mask = table_df["run"] == production_run
+    if prod_mask.any():
+        prod_models = set(table_df.loc[prod_mask, "model"].astype(str).tolist())
+        if "weighted_ensemble" in prod_models:
+            ensemble_model = "weighted_ensemble"
+    # ---- interval_levels (P5b): derived from the data.  Prefer the
+    # artifact's interval_coverage_weighted_ensemble[*].level entries;
+    # fall back to the levels whose interval_coverage_* columns are
+    # populated on the ensemble row; else null. ----
+    coverage_entries = metrics_json.get("interval_coverage_weighted_ensemble", [])
+    levels: list[float] | None = None
+    if isinstance(coverage_entries, list) and coverage_entries:
+        lvl = [
+            float(e.get("level"))
+            for e in coverage_entries
+            if isinstance(e, dict) and e.get("level") is not None
+        ]
+        if lvl:
+            levels = sorted(lvl)
+    if not levels and ensemble_model is not None:
+        we_rows = table_df[
+            (table_df["run"] == production_run) & (table_df["model"] == ensemble_model)
+        ]
+        if len(we_rows):
+            r = we_rows.iloc[0]
+            lvl = []
+            for col in ("interval_coverage_50", "interval_coverage_80", "interval_coverage_90"):
+                v = _maybe_float(r.get(col))
+                if v is not None:
+                    lvl.append(float(col.rsplit("_", 1)[1]) / 100.0)
+            if lvl:
+                levels = sorted(lvl)
+
+    # ---- n_test / n_dev from the loaded prediction parquets (P5b). ----
+    n_test = (
+        int(len(app_exports.test_predictions_df))
+        if getattr(app_exports, "test_predictions_df", None) is not None
+        else None
+    )
+    n_dev = (
+        int(len(app_exports.oof_predictions_df))
+        if getattr(app_exports, "oof_predictions_df", None) is not None
+        else None
+    )
+
+    # ---- model_info: the backend's documented registry mapping (P5b).
+    # Only the models that actually appear in the table are reported. ----
+    from app.schemas.canonical import DEFAULT_CONFIDENCE_LEVEL, INTERVAL_METHOD, MODEL_INFO
+
+    present_models = sorted(set(table_df["model"].astype(str).tolist()))
+    model_info = {m: MODEL_INFO[m] for m in present_models if m in MODEL_INFO}
+
+    created = str(metrics_json.get("created", ""))
+    run_label = f"{production_run} · {created}" if created else (production_run or None)
+
     return MetricsResponse(
         table=MetricsTableResponse(rows=rows, n_runs=n_runs, n_models_per_run=n_models_per_run),
         metrics_json=MetricsJsonResponse(
-            production_run=str(metrics_json.get("production_run", "")),
-            created=str(metrics_json.get("created", "")),
+            production_run=production_run,
+            created=created,
             runs=metrics_json.get("runs", {}),
-            interval_coverage_weighted_ensemble=metrics_json.get(
-                "interval_coverage_weighted_ensemble", []
-            ),
+            interval_coverage_weighted_ensemble=coverage_entries,
         ),
+        ensemble_model=ensemble_model,
+        production_run_label=run_label,
+        interval_levels=levels,
+        default_interval_level=DEFAULT_CONFIDENCE_LEVEL,
+        interval_method=INTERVAL_METHOD,
+        n_test=n_test,
+        n_dev=n_dev,
+        model_info=model_info,
     )
 
 
@@ -186,7 +292,17 @@ async def feature_evaluation(request: Request) -> FeatureEvaluationResponse:
 
 @router.get("/model/explainability", response_model=ExplainabilityResponse)
 async def explainability(request: Request) -> ExplainabilityResponse:
-    """Global mean-|SHAP| + native & permutation importance + feature labels."""
+    """Global mean-|SHAP| + native & permutation importance + feature labels.
+
+    P6b additions: ``models`` (the ensemble member list with display names,
+    families, weights and a has_shap flag) + ``default_model``; the
+    ``ensemble_shap_coverage`` block is now normalised to fractions with a
+    ``source`` flag — recomputed from the actually-loaded ensemble's weights
+    when the model registry is loaded (the same shared computation the live
+    /predict coverage block uses), else the notebook-time manifest values;
+    ``typical_price_per_acre_ksh`` / ``combined_base_value`` carry the
+    load-time baseline when the explanation service is available.
+    """
     app_exports = request.app.state.app_exports
     shap_df = app_exports.require("shap_global_df", "shap_global.csv")
     imp_df = app_exports.require("feature_importance_df", "feature_importance.csv")
@@ -225,12 +341,23 @@ async def explainability(request: Request) -> ExplainabilityResponse:
         for name, f in features_dict.items()
     }
 
+    # ---- P6b additions: member list, coverage block, load-time baseline. ----
+    registry = getattr(request.app.state, "model_registry", None)
+    explanation_service = getattr(request.app.state, "explanation_service", None)
+    coverage_block = build_coverage_block(manifest, registry)
+    models, default_model = build_models_list(shap_df, registry)
+    combined_base, typical_price = compute_typical_price(registry, explanation_service)
+
     return ExplainabilityResponse(
         production_run=str(manifest.get("production_run", "")),
         shap_global=shap_rows,
         feature_importance=imp_rows,
         feature_labels=labels,
-        ensemble_shap_coverage=manifest.get("ensemble_shap_coverage", {}),
+        ensemble_shap_coverage=coverage_block,
+        models=models,
+        default_model=default_model,
+        typical_price_per_acre_ksh=typical_price,
+        combined_base_value=combined_base,
     )
 
 
@@ -389,7 +516,38 @@ async def error_by_support(request: Request) -> ErrorBySupportResponse:
             n_listings=int(r.get("n_listings", 0)),
             oof_rmse=float(r.get("oof_rmse", 0.0)),
             oof_mae=float(r.get("oof_mae", 0.0)),
+            band_order=0,
         )
         for r in rows_data
     ]
-    return ErrorBySupportResponse(rows=rows, n_rows=len(rows))
+
+    # ---- P5b: band_order (ascending ordinal within each support_measure
+    # group) + support_measures (the distinct groups with i18n label
+    # keys).  The band label is served verbatim; the frontend never
+    # re-derives any embedded threshold. ----
+
+    grouped: dict[str, list[ErrorBySupportRow]] = {}
+    for row in rows:
+        grouped.setdefault(row.support_measure, []).append(row)
+    measure_order: list[str] = []
+    for measure, group in grouped.items():
+        if measure not in measure_order:
+            measure_order.append(measure)
+        order_by_band = {
+            b: i for i, b in enumerate(sorted((row.band for row in group), key=_band_sort_key))
+        }
+        for row in group:
+            row.band_order = order_by_band[row.band]
+
+    _MEASURE_LABEL_KEYS = {
+        "county_listings": "model.errorBySupport.measure.countyListings",
+        "nearby_within_50km": "model.errorBySupport.measure.nearby",
+    }
+    support_measures = [
+        SupportMeasureOption(
+            value=measure,
+            label_key=_MEASURE_LABEL_KEYS.get(measure, f"model.errorBySupport.measure.{measure}"),
+        )
+        for measure in measure_order
+    ]
+    return ErrorBySupportResponse(rows=rows, n_rows=len(rows), support_measures=support_measures)

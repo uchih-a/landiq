@@ -213,14 +213,14 @@ class TestOpenAPISnapshot:
             text=True,
             cwd=str(Path(__file__).resolve().parent.parent.parent),
         )
-        assert (
-            result.returncode == 0
-        ), f"OpenAPI snapshot diff detected:\n{result.stdout}\n{result.stderr}"
+        assert result.returncode == 0, (
+            f"OpenAPI snapshot diff detected:\n{result.stdout}\n{result.stderr}"
+        )
 
     def test_snapshot_file_exists(self):
         """The snapshot file is committed to the repo."""
         snapshot = Path(__file__).resolve().parent.parent.parent / "docs" / "openapi.snapshot.json"
-        assert (
-            snapshot.exists()
-        ), "docs/openapi.snapshot.json not found — run `make openapi-snapshot`"
+        assert snapshot.exists(), (
+            "docs/openapi.snapshot.json not found — run `make openapi-snapshot`"
+        )
         assert snapshot.stat().st_size > 0

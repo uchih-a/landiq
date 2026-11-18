@@ -44,11 +44,13 @@ export function PillButton({
   return (
     <button className={`${base} ${variants[variant]} ${className}`} {...props}>
       {leadingIcon && (
-        <span className="material-symbols-outlined text-[20px]">{leadingIcon}</span>
+        <span className="material-symbols-outlined text-[20px]" aria-hidden="true">
+          {leadingIcon}
+        </span>
       )}
       {children}
       {trailingIcon && (
-        <span className="material-symbols-outlined text-[18px] text-secondary">
+        <span className="material-symbols-outlined text-[18px] text-secondary" aria-hidden="true">
           {trailingIcon}
         </span>
       )}
