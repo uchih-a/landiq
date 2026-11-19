@@ -110,6 +110,23 @@ NAIROBI_METRO_COUNTIES = {
 # ------------------------------------------------------------------ POI layer
 
 
+import re
+
+_HSTORE_TAG_RE = re.compile(r'"(?P<key>(?:[^"\\]|\\.)*)"=>"(?P<val>(?:[^"\\]|\\.)*)"')
+
+
+def _hstore_get(other_tags, key: str) -> str | None:
+    """Pull one tag's value out of an OSM hstore-formatted other_tags string
+    (e.g. '"amenity"=>"hospital","name"=>"Example"'). Returns None if the
+    key isn't present or other_tags is null/not a string."""
+    if not other_tags or not isinstance(other_tags, str):
+        return None
+    for m in _HSTORE_TAG_RE.finditer(other_tags):
+        if m.group("key") == key:
+            return m.group("val").replace('\\"', '"').replace("\\\\", "\\")
+    return None
+
+
 def extract_pois_named(pbf_path: str, out_path: str) -> int:
     """Run ogr2ogr with ``name`` added to Cell 5.2's -select list.
 
@@ -120,6 +137,13 @@ def extract_pois_named(pbf_path: str, out_path: str) -> int:
 
     # Cell 5.2 — points layer: amenity OR shop OR highway=bus_stop
     # CHANGE: -select adds "name" (Cell 5.2 had only "amenity,shop,highway")
+    # NOTE: "amenity"/"shop" are not in every GDAL install's default OSM
+    # points attribute list (it falls back to a minimal built-in set —
+    # name/highway/place/etc. — when it can't find a full osmconf.ini), and
+    # not every GDAL build exposes the fetch_hstore_value()/hstore_get_value()
+    # SQL helper either. So: filter with a plain LIKE on the raw other_tags
+    # string (universally supported) and parse the tag values out in Python
+    # afterward (see _hstore_get below) instead of relying on either.
     subprocess.run(
         [
             "ogr2ogr",
@@ -129,9 +153,10 @@ def extract_pois_named(pbf_path: str, out_path: str) -> int:
             pbf_path,
             "points",
             "-where",
-            "amenity IS NOT NULL OR shop IS NOT NULL OR highway = 'bus_stop'",
+            "other_tags LIKE '%\"amenity\"=>%' OR other_tags LIKE '%\"shop\"=>%' "
+            "OR highway = 'bus_stop'",
             "-select",
-            "amenity,shop,highway,name",
+            "name,highway,other_tags",
             "-lco",
             "SPATIAL_INDEX=YES",
             "-overwrite",
@@ -141,6 +166,9 @@ def extract_pois_named(pbf_path: str, out_path: str) -> int:
 
     # Cell 5.2 — multipolygons layer: amenity OR shop (no highway for polys)
     # CHANGE: -select adds "name"
+    # NOTE: this GDAL build rejects -append combined with -select/-where
+    # ("use -fieldmap or -sql instead") — fold both into a single -sql
+    # statement instead, which is explicitly supported alongside -append.
     subprocess.run(
         [
             "ogr2ogr",
@@ -149,11 +177,9 @@ def extract_pois_named(pbf_path: str, out_path: str) -> int:
             "-append",
             temp_out,
             pbf_path,
-            "multipolygons",
-            "-where",
-            "amenity IS NOT NULL OR shop IS NOT NULL",
-            "-select",
-            "amenity,shop,name",
+            "-sql",
+            "SELECT name, other_tags FROM multipolygons "
+            "WHERE other_tags LIKE '%\"amenity\"=>%' OR other_tags LIKE '%\"shop\"=>%'",
             "-nln",
             "multipolygons",
         ],
@@ -166,6 +192,18 @@ def extract_pois_named(pbf_path: str, out_path: str) -> int:
     pts = gpd.read_file(temp_out, layer="points")
     poly = gpd.read_file(temp_out, layer="multipolygons")
     print(f"  points: {len(pts):,} | polygons: {len(poly):,}")
+
+    # Extract amenity/shop out of the raw other_tags hstore string (format:
+    # '"key1"=>"value1","key2"=>"value2"'), rather than relying on any
+    # ogr2ogr SQL function support that may not be present in this build.
+    for frame in (pts, poly):
+        if "other_tags" in frame.columns:
+            frame["amenity"] = frame["other_tags"].apply(lambda v: _hstore_get(v, "amenity"))
+            frame["shop"] = frame["other_tags"].apply(lambda v: _hstore_get(v, "shop"))
+            frame.drop(columns=["other_tags"], inplace=True)
+        else:
+            frame["amenity"] = None
+            frame["shop"] = None
 
     # Cell 5.2 — polygons to centroids, concat, drop null geometries
     poly["geometry"] = poly.geometry.centroid
@@ -303,7 +341,7 @@ def extract_places_gazetteer(pbf_path: str, out_path: str) -> int:
             "-where",
             where_clause,
             "-select",
-            "name,place,population",
+            "name,place",
             "-lco",
             "SPATIAL_INDEX=YES",
             "-overwrite",

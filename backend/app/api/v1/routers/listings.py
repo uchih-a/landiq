@@ -424,7 +424,7 @@ async def listing_nearby(
     app_exports = request.app.state.app_exports
     df = app_exports.require("listings_scored_df", "listings_scored.parquet")
 
-    match_mask = df["listing_no"].fillna("") == listing_no
+    match_mask = df["listing_no"].astype(str).fillna("") == listing_no
     if int(match_mask.sum()) == 0:
         raise AppError(
             code="RESOURCE_NOT_FOUND",
@@ -476,7 +476,7 @@ async def listing_nearby(
         r = df.iloc[int(i)]
         nearby.append(
             NearbyListing(
-                listing_no=_maybe(r.get("listing_no")),
+                listing_no=_maybe_str(r.get("listing_no")),
                 latitude=_maybe(r.get("latitude")),
                 longitude=_maybe(r.get("longitude")),
                 verdict=str(r["verdict"]),
@@ -701,11 +701,24 @@ def _maybe(v: Any) -> Any:
     return v
 
 
+def _maybe_str(v: Any) -> str | None:
+    """NaN / pandas NA -> None; otherwise coerce to str.
+
+    ``listing_no`` is numeric in the source parquet (e.g. ``105784428``,
+    ``-835``) but is typed ``str | None`` in the API schemas, so every
+    call site that surfaces it to a response model must go through this
+    instead of the plain ``_maybe`` (which passes the raw int through and
+    fails Pydantic validation).
+    """
+    v = _maybe(v)
+    return None if v is None else str(v)
+
+
 def _listings_row_from_series(r: pd.Series) -> ListingsScoredRow:
     """Build a ListingsScoredRow from a pandas Series."""
     return ListingsScoredRow(
         listing_url=_maybe(r.get("listing_url")),
-        listing_no=_maybe(r.get("listing_no")),
+        listing_no=_maybe_str(r.get("listing_no")),
         title=_maybe(r.get("title")),
         location=_maybe(r.get("location")),
         county=_maybe(r.get("county")),
