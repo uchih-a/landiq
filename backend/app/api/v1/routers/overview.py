@@ -82,6 +82,12 @@ async def overview_summary(
     """Read-only summary for the Overview page."""
     app_exports = request.app.state.app_exports
     df = app_exports.require("listings_scored_df", "listings_scored.parquet")
+    # Part B: derive is_suspect + suspect_reason at serve time (never persisted)
+    # so the verdicts block can report n_suspect and exclude suspects from the
+    # underpriced/fair/overpriced corpus counts.
+    from app.services.suspect_gate import compute_suspect_columns
+
+    df = compute_suspect_columns(df)
 
     # ---- Validate prop_type against the canonical list ----
     if prop_type is not None:

@@ -128,6 +128,17 @@ class VerdictsBlock(BaseModel):
     n_listings: int = Field(
         ..., ge=0, description="Filtered usable row count (shares are over this)"
     )
+    n_suspect: int = Field(
+        0,
+        ge=0,
+        description=(
+            "Part B suspect-listing gate.  Suspects (listed_over_predicted "
+            "outside [0.05, 20.0] or non-finite size) are reported here "
+            "SEPARATELY and EXCLUDED from the underpriced/fair/overpriced "
+            "counts above.  Shares stay over n_listings (the full filtered "
+            "usable count)."
+        ),
+    )
 
 
 class PropertyTypeStat(BaseModel):

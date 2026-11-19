@@ -513,6 +513,7 @@ export function buildListingsScoredQuery(filters: ListingsScoredFilters): string
   if (filters.scored_by) params.set('scored_by', filters.scored_by);
   if (filters.data_quality_flag != null)
     params.set('data_quality_flag', String(filters.data_quality_flag));
+  if (filters.is_suspect != null) params.set('is_suspect', String(filters.is_suspect));
   if (filters.near_amenity) params.set('near_amenity', filters.near_amenity);
   if (filters.radius_km != null) params.set('radius_km', String(filters.radius_km));
   if (filters.sort) params.set('sort', filters.sort);
@@ -586,6 +587,7 @@ export function buildListingsExportUrl(filters: ListingsScoredFilters): string {
   if (filters.scored_by) params.set('scored_by', filters.scored_by);
   if (filters.data_quality_flag != null)
     params.set('data_quality_flag', String(filters.data_quality_flag));
+  if (filters.is_suspect != null) params.set('is_suspect', String(filters.is_suspect));
   if (filters.near_amenity) params.set('near_amenity', filters.near_amenity);
   if (filters.radius_km != null) params.set('radius_km', String(filters.radius_km));
   if (filters.sort) params.set('sort', filters.sort);

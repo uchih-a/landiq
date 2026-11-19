@@ -108,6 +108,31 @@ INTERVAL_METHOD: str = "multiplicative split-conformal"
 FLAG_LOWER_PCT: int = 1
 FLAG_UPPER_PCT: int = 99
 
+#: Suspect-listing gate (Part B).  A listing is "suspect" when its
+#: ``listed_over_predicted`` ratio falls outside this band — i.e. the
+#: listed per-acre price is implausible relative to the model's own
+#: location-aware estimate.  The gate is computed at serve time from the
+#: existing ``listed_over_predicted`` column (Cell 9.6) and is NEVER
+#: written to the artifacts (no retrain, no artifact edit).
+#:
+#: - ``SUSPECT_RATIO_LOW`` (0.05): listed < 5 % of predicted -> the listing
+#:   is almost certainly a per-acre price recorded as a total, a truncated
+#:   size, or a scraping error (e.g. Karen at KSh 100K/acre when the model
+#:   says ~KSh 2M/acre).  ``suspect_reason = "listed_far_below_model"``.
+#: - ``SUSPECT_RATIO_HIGH`` (20.0): listed > 20x predicted -> the listing
+#:   is almost certainly a unit error or a typo.  ``suspect_reason =
+#:   "listed_far_above_model"``.
+#: - A non-finite or non-positive ``size_acres`` is ALSO suspect
+#:   (``suspect_reason = "non_finite_size"``) — those rows produced
+#:   ``price_per_acre = inf`` before the A1 fix and still must not surface
+#:   as "deals".
+#:
+#: The verdict field and its 3-value enum are unchanged; suspects are
+#: reported separately (``n_suspect``) and excluded from the
+#: underpriced/fair/overpriced corpus counts.
+SUSPECT_RATIO_LOW: float = 0.05
+SUSPECT_RATIO_HIGH: float = 20.0
+
 #: Methodology copy served by ``/meta`` (P8b) — the ONE backend place
 #: that describes the pipeline in plain language.  Every claim below is
 #: verifiable in this repo:

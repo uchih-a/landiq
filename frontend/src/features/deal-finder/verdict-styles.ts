@@ -37,3 +37,32 @@ export const VERDICT_STYLES: Record<string, VerdictStyle> = {
 export function verdictStyle(verdict: string): VerdictStyle {
   return VERDICT_STYLES[(verdict ?? '').toLowerCase()] ?? VERDICT_STYLES['fair'];
 }
+
+/**
+ * Part B — the suspect-listing gate chip.  Rendered INSTEAD of the verdict
+ * chip when ``is_suspect`` is true.  Grey (neutral) so it never reads as a
+ * deal signal; the tooltip carries the reason.
+ */
+export const SUSPECT_STYLE: VerdictStyle = {
+  chip: 'bg-surface-container-high text-secondary',
+  dot: 'bg-secondary',
+  hex: '#5C5752',
+  labelKey: 'deals.suspectData',
+};
+
+/**
+ * Map a backend ``suspect_reason`` to its i18n label key.  Unknown reasons
+ * fall back to a generic label so the chip always has readable text.
+ */
+export function suspectReasonLabelKey(reason: string | null | undefined): string {
+  switch (reason) {
+    case 'listed_far_below_model':
+      return 'deals.suspectReason.listed_far_below_model';
+    case 'listed_far_above_model':
+      return 'deals.suspectReason.listed_far_above_model';
+    case 'non_finite_size':
+      return 'deals.suspectReason.non_finite_size';
+    default:
+      return 'deals.suspectData';
+  }
+}

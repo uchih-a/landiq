@@ -1885,3 +1885,67 @@ is collected here so the next maintainer knows what was approximated.
         view too (product decision).
      8. The four undesigned Data Explorer tabs (#162) — each needs a
         design + its own endpoint decision before building.
+
+## Part B — Suspect-listing gate (2026-11-19)
+
+A serve-time data-quality gate that keeps listings with implausible
+listed-vs-predicted ratios out of the Deal Finder's deal signal.  Added in
+response to the Karen-at-KSh-100K/acre case the global 1st–99th percentile
+``data_quality_flag`` missed (a global trim cannot see a listing that is
+locally absurd but globally in-range).
+
+**Gate definition** (``backend/app/schemas/canonical.py``):
+
+- ``SUSPECT_RATIO_LOW = 0.05`` — listed per-acre price < 5 % of the model's
+  location-aware prediction → ``suspect_reason = "listed_far_below_model"``.
+- ``SUSPECT_RATIO_HIGH = 20.0`` — listed > 20× predicted →
+  ``suspect_reason = "listed_far_above_model"``.
+- A non-finite or non-positive ``size_acres`` is ALSO suspect
+  (``suspect_reason = "non_finite_size"``) — those rows produced
+  ``price_per_acre = inf`` before the A1 size fix.
+
+**Where it runs:** ``backend/app/services/suspect_gate.py`` derives
+``is_suspect`` + ``suspect_reason`` from the existing
+``listed_over_predicted`` and ``size_acres`` columns at serve time.  It is
+NEVER written to ``artifacts/`` (no retrain, no artifact edit).  The
+``/listings/scored`` and ``/listings/scored/export.csv`` endpoints gained an
+``is_suspect`` query param (same true/false/absent pattern as
+``data_quality_flag``); the CSV gained ``is_suspect`` + ``suspect_reason``
+columns.  ``ListingsScoredRow`` gained ``is_suspect: bool`` and
+``suspect_reason: str | None``.  The verdict field and its 3-value enum are
+unchanged.
+
+**Corpus counts:** the overview ``VerdictsBlock`` now reports ``n_suspect``
+separately and EXCLUDES suspects from the underpriced/fair/overpriced counts
+(``n_unknown`` is rebalanced so the four counts still sum to ``n_listings``).
+
+**Frontend:** ``ResultsTable`` and ``ListingDetailPanel`` render a grey
+"Suspect data" chip (tooltip = reason) instead of the verdict chip and "—"
+instead of the % / "asking is N% below the range" when ``is_suspect``.  The
+"Hide possible data errors" toggle now also hides suspect rows, and the
+default Deal Finder view hides them (``hideDataErrors`` defaults to true).
+
+**Open items / known limits:**
+
+1. The gate is a simple ratio band on ``listed_over_predicted``.  It does
+   not know about parcel size tiers, so a genuinely cheap large ranch
+   (e.g. 110468626 — 4 000 acres at KSh 250k/acre) can read as
+   ``listed_far_below_model`` when the model baseline is a global/county
+   median that ignores size.  The real size-aware model prediction (Cell
+   9.6) would not flag it; this is a property of the baseline, not the
+   gate.  Revisit if false-suspect noise on large parcels becomes common.
+2. ``is_suspect`` is computed per-request from the cached
+   ``listings_scored_df`` (a copy is made each serve).  At the dataset's
+   current size (~6k rows) this is microseconds; if the frame grows 100×,
+   cache the columns on the registry alongside the frame.
+3. The Part B tests use a fixture ``listings_scored.parquet`` built from
+   the real CSV with a global-median ``predicted`` heuristic
+   (``backend/tests/fixtures/listings_scored_fixture.py``), because the
+   real model artifacts were not shipped and the hard constraints forbid a
+   retrain.  The gate LOGIC is identical whether the predicted comes from
+   the real model or this baseline; the specific rows flagged differ.
+   Swap the fixture for the real parquet once Notebook 3 is rerun.
+4. NaN ``listed_over_predicted`` (no prediction) is treated as NOT suspect
+   — those rows are already covered by ``data_quality_flag`` and the
+   usable-frame filter.  If a NaN-ratio row should be suspect, say so and
+   extend ``compute_suspect_columns``.

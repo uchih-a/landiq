@@ -20,7 +20,7 @@ import { ValuationCard } from '@/components';
 import type { ListingsScoredRow } from '@/lib/api/types';
 import { formatMoney } from '@/lib/currency/format';
 
-import { VERDICT_STYLES } from './verdict-styles';
+import { SUSPECT_STYLE, VERDICT_STYLES, suspectReasonLabelKey } from './verdict-styles';
 import { useLocale } from '@/lib/i18n/useLocale';
 
 interface Props {
@@ -117,12 +117,25 @@ export function ListingDetailPanel({ listing, onClose }: Props) {
             </p>
           </div>
           <div className="flex flex-col items-end gap-2">
-            <span
-              className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-bold tracking-tight shrink-0 shadow-xs ${vStyle.chip}`}
-            >
-              {pctSign}
-              {pct}% {t(verdictShortKey(listing.verdict))}
-            </span>
+            {listing.is_suspect ? (
+              // Part B: suspect rows show a grey "Suspect data" chip (tooltip
+              // = reason) instead of the verdict chip, and "—" instead of %.
+              <span
+                className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-bold tracking-tight shrink-0 shadow-xs ${SUSPECT_STYLE.chip}`}
+                title={t('deals.suspectChipTitle', {
+                  reason: t(suspectReasonLabelKey(listing.suspect_reason)),
+                })}
+              >
+                {t('deals.suspectData')}
+              </span>
+            ) : (
+              <span
+                className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-bold tracking-tight shrink-0 shadow-xs ${vStyle.chip}`}
+              >
+                {pctSign}
+                {pct}% {t(verdictShortKey(listing.verdict))}
+              </span>
+            )}
             <button
               type="button"
               onClick={onClose}
@@ -239,8 +252,14 @@ export function ListingDetailPanel({ listing, onClose }: Props) {
               </div>
               <div className="flex items-center justify-between text-caption-sm text-secondary px-1">
                 <span>{formatMoney(low)} / ac</span>
-                {/* Out-of-range sentence — the deal signal the old clamp hid. */}
-                {abovePct != null ? (
+                {/* Out-of-range sentence — the deal signal the old clamp hid.
+                    Part B: suspect rows show "—" instead (the signal is
+                    unreliable when listed/predicted is implausible). */}
+                {listing.is_suspect ? (
+                  <span className="text-xs text-secondary font-semibold">
+                    {t('deals.suspectPlaceholder')}
+                  </span>
+                ) : abovePct != null ? (
                   <span className="text-xs text-[#C84B31] font-semibold flex items-center gap-1" role="status">
                     <span className="material-symbols-outlined text-[14px]" aria-hidden="true">
                       trending_up

@@ -318,6 +318,13 @@ export interface ListingsScoredRow {
   scored_by: string;
   verdict: string;
   data_quality_flag: boolean;
+  /** Part B: suspect-listing gate (true when listed_over_predicted is
+   * outside [0.05, 20.0] or size is non-finite). Suspects are excluded
+   * from deal verdicts and the corpus counts. */
+  is_suspect?: boolean;
+  /** One of 'listed_far_below_model' | 'listed_far_above_model' |
+   * 'non_finite_size' | null. */
+  suspect_reason?: string | null;
 }
 
 export interface ListingsScoredResponse {
@@ -650,6 +657,9 @@ export interface ListingsScoredFilters {
   verdict?: VerdictFilter;
   scored_by?: ScoredByFilter;
   data_quality_flag?: boolean;
+  /** Part B suspect-listing gate: true = only suspect rows, false = only
+   * non-suspect rows, undefined = both. */
+  is_suspect?: boolean;
   near_amenity?: NearAmenityFilter;
   radius_km?: AmenityRadiusKm;
   sort?: ListingsSortKey;
@@ -773,6 +783,9 @@ export interface OverviewVerdictsBlock {
   fair_share: number | null;
   overpriced_share: number | null;
   n_listings: number;
+  /** Part B: suspect count, reported separately and excluded from the
+   * underpriced/fair/overpriced counts above. */
+  n_suspect?: number;
 }
 
 export interface OverviewPropertyTypeStat {
