@@ -1,0 +1,31 @@
+# Files excluded from the container image
+.git
+.github
+.vscode
+.idea
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+.venv
+venv
+env
+*.egg-info
+artifacts/*
+!artifacts/README.md
+frontend/
+docs/
+*.md
+!LICENSE
+.env
+.env.*
+!.env.example
+compose.yaml
+compose.*.yaml
+Makefile
+.pre-commit-config.yaml
+scripts/
+# Old requirements files (removed — deps now in pyproject.toml + uv.lock)
+requirements.txt
+requirements-dev.txt
