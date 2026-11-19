@@ -19,6 +19,14 @@ EARTH_RADIUS_KM = 6371.0
 # Cell 3.3 — Kenya bounding box (used for point validation)
 KE_BOUNDS = {"lat": (-4.72, 4.62), "lon": (33.91, 41.91)}
 
+# Nairobi CBD reference point — the canonical default every endpoint uses
+# when scoring_params.json is absent or doesn't override it.  Matches
+# Notebook 3's ``nairobi_reference_point`` fallback.  The backend's
+# ``app.services.geo_reference.load_nairobi_reference`` reads
+# ``scoring_params.json`` and returns this default when the file is missing.
+NAIROBI_REFERENCE_LAT = -1.2921
+NAIROBI_REFERENCE_LON = 36.8219
+
 
 def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """Return the great-circle distance in km between two points.

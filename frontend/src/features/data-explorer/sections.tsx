@@ -3,22 +3,39 @@
  * comes from, Listings & Medians by County table, and the mobile
  * Listing sample records card. Kept in a sibling module so index.tsx
  * stays readable; all components are page-private.
+ *
+ * P7b: every string renders from i18n; the threshold is `number | null`
+ * (null hides the threshold divider + ready/not-ready statuses and shows
+ * "threshold not available"); money uses the shared currency-aware
+ * formatter; bars carry sr-only text alternatives (county, count, status)
+ * so colour is never the only encoding.
  */
-import type { ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 
 import { EmptyState, LoadingSkeleton, ValuationCard } from '@/components';
+import { formatCompactMoney, useCurrency } from '@/lib/currency/format';
+import { useFormatNumber } from '@/lib/i18n/useLocale';
+import {
+  CHART_COLOR_OUTLINE,
+  CHART_COLOR_RAMP_PALE,
+} from '@/lib/ui/chart-tokens';
 
-import { compactKSh, shortNum, type CountyRow } from './helpers';
+import type { CountyRow } from './helpers';
 
-/** P1 hatch approach: muted diagonal hatch as a CSS gradient. */
+/** P1 hatch approach: muted diagonal hatch as a CSS gradient (tokens). */
 const MUTED_HATCH =
-  'repeating-linear-gradient(45deg, #dec1b3 0, #dec1b3 2px, transparent 2px, transparent 8px)';
+  `repeating-linear-gradient(45deg, ${CHART_COLOR_RAMP_PALE} 0, ${CHART_COLOR_RAMP_PALE} 2px, transparent 2px, transparent 8px)`;
+
+/** How many above-threshold bars the county chart renders — display
+ *  density, not a data fact (the count is also printed as text). */
+const TOP_N_COUNTY_BARS = 14;
+
+/** Rows-per-page mirror of index.tsx's PAGE_SIZE (display density). */
+const PAGE_ROWS = 10;
 
 // ----------------------------------------------------------------------
 // 5. Listings per county
 // ----------------------------------------------------------------------
-
-const TOP_N_COUNTY_BARS = 14;
 
 export function ListingsPerCountyCard({
   rows,
@@ -28,11 +45,13 @@ export function ListingsPerCountyCard({
   onRetry,
 }: {
   rows: CountyRow[];
-  threshold: number;
+  threshold: number | null;
   isLoading: boolean;
   isError: boolean;
   onRetry: () => void;
 }) {
+  const { t } = useTranslation();
+  const formatNumber = useFormatNumber();
   if (isLoading) {
     return (
       <ValuationCard noPadding>
@@ -46,46 +65,55 @@ export function ListingsPerCountyCard({
     return (
       <EmptyState
         icon="cloud_off"
-        title="Couldn't load county counts"
-        message="The county row-counts feed is unavailable."
-        actionLabel="Retry"
+        title={t('de.counties.errorTitle')}
+        message={t('de.counties.errorMessage')}
+        actionLabel={t('common.retry')}
         onAction={onRetry}
       />
     );
   }
 
   const sorted = [...rows].sort((a, b) => b.nListings - a.nListings);
-  const above = sorted.filter((r) => r.modelReady);
-  const below = sorted.filter((r) => !r.modelReady);
+  // Null threshold: NO ready/not-ready split (an honest unknown), one
+  // plain list by count.
+  const above = threshold == null ? sorted : sorted.filter((r) => r.modelReady === true);
+  const below = threshold == null ? [] : sorted.filter((r) => r.modelReady !== true);
   const maxN = Math.max(1, ...sorted.map((r) => r.nListings));
-  // The threshold divider sits at the threshold share of the max bar.
-  const thresholdPct = Math.max(2, (threshold / maxN) * 100);
+  // VISUAL MINIMUM ONLY (P7b-E): the divider needs a visible line even
+  // when the threshold is tiny relative to the tallest bar; the label
+  // prints the real number, so the clamp cannot misrepresent it.
+  const thresholdPct = Math.max(2, threshold == null ? 0 : (threshold / maxN) * 100);
 
   return (
     <ValuationCard noPadding>
       <div className="p-space-lg">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 mb-1">
           <h2 className="font-headline-section text-headline-section text-on-surface font-medium">
-            Listings per county
+            {t('de.counties.title')}
           </h2>
           <span className="font-label-metric text-label-metric text-secondary">
-            {rows.length} Counties Tracked
+            {t('de.counties.tracked', { n: formatNumber(rows.length) })}
           </span>
         </div>
         <p className="font-body-regular text-body-regular text-secondary mb-space-md">
-          Sample count across counties. Valid modeling requires ≥ {threshold} listings.
+          {threshold != null
+            ? t('de.counties.subtitle', { threshold: formatNumber(threshold) })
+            : t('de.counties.subtitleUnavailable')}
         </p>
 
         <div className="relative w-full">
-          {/* Threshold divider line + label. */}
-          <div
-            className="absolute top-0 bottom-6 w-px border-l-2 border-dashed border-primary-container/40 z-10 pointer-events-none"
-            style={{ left: `calc(25% + ${thresholdPct * 0.5}% * 2)` }}
-          >
-            <div className="absolute -top-5 -left-14 bg-surface-container-high text-on-surface font-caption-sm text-[11px] px-2 py-0.5 rounded-full whitespace-nowrap">
-              Threshold: ≥ {threshold} listings
+          {/* Threshold divider line + label — hidden entirely when the
+              threshold is null (no invented divider position). */}
+          {threshold != null && (
+            <div
+              className="absolute top-0 bottom-6 w-px border-l-2 border-dashed border-primary-container/40 z-10 pointer-events-none"
+              style={{ left: `calc(25% + ${thresholdPct * 0.5}% * 2)` }}
+            >
+              <div className="absolute -top-5 -left-14 bg-surface-container-high text-on-surface font-caption-sm text-[11px] px-2 py-0.5 rounded-full whitespace-nowrap">
+                {t('de.counties.thresholdLabel', { threshold: formatNumber(threshold) })}
+              </div>
             </div>
-          </div>
+          )}
 
           <div className="flex flex-col gap-2 font-label-metric text-[12px] pb-6">
             {above.slice(0, TOP_N_COUNTY_BARS).map((r) => (
@@ -97,18 +125,23 @@ export function ListingsPerCountyCard({
                     style={{ width: `${(r.nListings / maxN) * 100}%` }}
                   />
                 </div>
-                <span className="col-span-1 text-on-surface font-semibold">{r.nListings}</span>
+                <span className="col-span-1 text-on-surface font-semibold">{formatNumber(r.nListings)}</span>
               </div>
             ))}
 
             {/* Below-threshold counties: muted + hatched, listed under the
                 threshold divider (m12 layout). */}
-            {below.length > 0 && (
+            {below.length > 0 && threshold != null && (
               <div className="flex items-center gap-2 pt-2 pb-1">
                 <span className="font-caption-sm text-caption-sm text-secondary whitespace-nowrap">
-                  Minimum threshold ({threshold} listings)
+                  {t('de.counties.belowLabel', { threshold: formatNumber(threshold) })}
                 </span>
-                <div className="h-0.5 w-6" style={{ backgroundImage: MUTED_HATCH.replace('45deg', 'to right').replace('#dec1b3 0, #dec1b3 2px', '#8a7266 0, #8a7266 6px').replace('transparent 2px, transparent 8px', 'transparent 6px, transparent 10px') }} />
+                <div
+                  className="h-0.5 w-6"
+                  style={{
+                    backgroundImage: `repeating-linear-gradient(to right, ${CHART_COLOR_OUTLINE} 0, ${CHART_COLOR_OUTLINE} 6px, transparent 6px, transparent 10px)`,
+                  }}
+                />
               </div>
             )}
             {below.map((r) => (
@@ -117,18 +150,41 @@ export function ListingsPerCountyCard({
                 <div className="col-span-8 h-4 bg-surface-container-low rounded-full overflow-hidden">
                   <div
                     className="h-full rounded-full"
-                    style={{ width: `${Math.max(1.5, (r.nListings / maxN) * 100)}%`, backgroundImage: MUTED_HATCH }}
+                    style={{
+                      // VISUAL MINIMUM WIDTH ONLY (P7b-E): a county with
+                      // just a listing or two must still show a sliver of
+                      // bar; its exact count is printed as text right of
+                      // the bar, so the clamp cannot make it look bigger
+                      // than it is.
+                      width: `${Math.max(1.5, (r.nListings / maxN) * 100)}%`,
+                      backgroundImage: MUTED_HATCH,
+                    }}
                   />
                 </div>
-                <span className="col-span-1 text-secondary">{r.nListings}</span>
+                <span className="col-span-1 text-secondary">{formatNumber(r.nListings)}</span>
               </div>
             ))}
           </div>
         </div>
 
+        {/* Hidden text alternative for the bar chart (P7b-L): every
+            rendered county with its count and status as plain text. */}
+        <p className="sr-only">
+          {t('de.counties.a11ySummary', {
+            list: above
+              .slice(0, TOP_N_COUNTY_BARS)
+              .map((r) => `${r.county}: ${formatNumber(r.nListings)}`)
+              .join('; '),
+          })}
+        </p>
+
         <div className="pt-3 text-secondary font-caption-sm text-caption-sm flex items-center justify-between flex-wrap gap-2">
-          <span>*Counties with &lt; {threshold} listings displayed with muted diagonal pattern</span>
-          <span>Showing top {Math.min(TOP_N_COUNTY_BARS, above.length)} displayed</span>
+          {threshold != null ? (
+            <span>{t('de.counties.note', { threshold: formatNumber(threshold) })}</span>
+          ) : (
+            <span>{t('de.counties.subtitleUnavailable')}</span>
+          )}
+          <span>{t('de.counties.showing', { n: Math.min(TOP_N_COUNTY_BARS, above.length) })}</span>
         </div>
       </div>
     </ValuationCard>
@@ -140,41 +196,26 @@ export function ListingsPerCountyCard({
 // ----------------------------------------------------------------------
 
 export function ProvenanceCard() {
+  const { t } = useTranslation();
+  const rows = [
+    { n: 1, title: t('de.provenance.row1'), sub: t('de.provenance.row1sub'), ways: 3 },
+    { n: 2, title: t('de.provenance.row2'), sub: t('de.provenance.row2sub'), ways: 3 },
+    { n: 3, title: t('de.provenance.row3'), sub: t('de.provenance.row3sub'), ways: 2 },
+  ] as const;
   return (
     <ValuationCard noPadding>
       <div className="p-space-lg">
         <div className="flex items-center justify-between mb-1">
           <h2 className="font-headline-section text-headline-section text-on-surface font-medium">
-            Where the data comes from
+            {t('de.provenance.title')}
           </h2>
           <span className="material-symbols-outlined text-secondary text-[20px]">share_location</span>
         </div>
         <p className="font-body-regular text-body-regular text-secondary mb-space-md">
-          Corpus provenance, spatial resolution, and extraction methods
+          {t('de.provenance.subtitle')}
         </p>
 
-        {(
-          [
-            {
-              n: '1',
-              title: 'Location accuracy',
-              sub: 'Spatial resolution',
-              designShares: ['Exact coordinates (68%)', 'Sub-county centroid (24%)', 'County fallback (8%)'],
-            },
-            {
-              n: '2',
-              title: 'How size was found',
-              sub: 'Parsing logic',
-              designShares: ['Direct acre field (72%)', 'Converted ha/sqm (21%)', 'Regex parsed (7%)'],
-            },
-            {
-              n: '3',
-              title: 'Asking price structure',
-              sub: 'Normalization basis',
-              designShares: ['Total asking price (84%)', 'Stated rate / acre (16%)'],
-            },
-          ] as const
-        ).map((row) => (
+        {rows.map((row) => (
           <div key={row.n} className="flex flex-col gap-2 mb-space-md last:mb-0">
             <div className="flex justify-between items-center">
               <span className="font-body-medium text-body-medium text-on-surface font-medium">
@@ -184,14 +225,13 @@ export function ProvenanceCard() {
             </div>
             {/* The design's stacked share bars are shown muted + hatched to
                 signal "shape exists, numbers unavailable". */}
-            <div className="h-5 w-full flex rounded-full overflow-hidden p-0.5 bg-surface-container-low opacity-50">
+            <div className="h-5 w-full flex rounded-full overflow-hidden p-0.5 bg-surface-container-low opacity-50" aria-hidden="true">
               <div className="h-full rounded-l-full" style={{ width: '60%', backgroundImage: MUTED_HATCH }} />
               <div className="h-full" style={{ width: '28%', backgroundImage: MUTED_HATCH }} />
               <div className="h-full rounded-r-full" style={{ width: '12%', backgroundImage: MUTED_HATCH }} />
             </div>
             <div className="font-caption-sm text-caption-sm text-secondary">
-              Not available yet — the extraction provenance shares are not recorded in the exported
-              dataset (the design's {row.designShares.length}-way split cannot be computed).
+              {t('de.provenance.unavailable', { n: row.ways })}
             </div>
           </div>
         ))}
@@ -202,14 +242,14 @@ export function ProvenanceCard() {
           <div className="flex items-center gap-2">
             <span className="material-symbols-outlined text-primary text-[20px]">verified</span>
             <span className="font-caption-sm text-caption-sm text-on-surface">
-              Data extraction automated pipeline active
+              {t('de.provenance.pipeline')}
             </span>
           </div>
           <a
             href="/about"
             className="font-caption-sm text-caption-sm font-semibold text-primary cursor-pointer hover:underline"
           >
-            View Spec
+            {t('de.provenance.viewSpec')}
           </a>
         </div>
       </div>
@@ -239,13 +279,16 @@ export function CountyTableCard({
   tablePage: number;
   onPage: (p: number) => void;
   totalRows: number;
-  nModelReady: number;
-  threshold: number;
+  nModelReady: number | null;
+  threshold: number | null;
   isLoading: boolean;
   isError: boolean;
   onRetry: () => void;
   onDownload: () => void;
 }) {
+  const { t } = useTranslation();
+  const formatNumber = useFormatNumber();
+  const { currency } = useCurrency();
   if (isLoading) {
     return (
       <ValuationCard noPadding>
@@ -259,24 +302,27 @@ export function CountyTableCard({
     return (
       <EmptyState
         icon="cloud_off"
-        title="Couldn't load county figures"
-        message="The county summary feed is unavailable."
-        actionLabel="Retry"
+        title={t('de.table.errorTitle')}
+        message={t('de.table.errorMessage')}
+        actionLabel={t('common.retry')}
         onAction={onRetry}
       />
     );
   }
+  const from = rows.length > 0 ? (tablePage - 1) * PAGE_ROWS + 1 : 0;
+  const to = (tablePage - 1) * PAGE_ROWS + rows.length;
   return (
     <ValuationCard noPadding>
       <div className="p-space-lg">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
             <h2 className="font-headline-section text-headline-section text-on-surface font-medium">
-              Listings &amp; Medians by County
+              {t('de.table.title')}
             </h2>
             <p className="font-body-regular text-body-regular text-secondary">
-              Benchmark figures across counties. Counties below {threshold} listings are masked from model
-              inference.
+              {threshold != null
+                ? t('de.table.subtitle', { threshold: formatNumber(threshold) })
+                : t('de.table.subtitleUnavailable')}
             </p>
           </div>
           <button
@@ -285,7 +331,7 @@ export function CountyTableCard({
             className="self-start sm:self-auto rounded-full px-4 py-2 bg-surface-container hover:bg-surface-container-high text-on-surface font-body-medium text-[12px] flex items-center gap-1.5 transition-all shadow-xs"
           >
             <span className="material-symbols-outlined text-[16px]">download</span>
-            Download CSV
+            {t('de.table.download')}
           </button>
         </div>
 
@@ -293,44 +339,50 @@ export function CountyTableCard({
           <table className="w-full text-left font-body-regular text-body-regular">
             <thead>
               <tr className="bg-surface-container-low/60 text-secondary font-label-uppercase text-[12px] uppercase tracking-wider">
-                <th className="py-3 px-4 rounded-l-full font-medium">County</th>
-                <th className="py-3 px-4 font-medium">Listings Count</th>
-                <th className="py-3 px-4 font-medium">Median per acre</th>
-                <th className="py-3 px-4 font-medium">Middle half (IQR)</th>
-                <th className="py-3 px-4 rounded-r-full font-medium">Status / Modeling Eligibility</th>
+                <th className="py-3 px-4 rounded-l-full font-medium">{t('de.table.col.county')}</th>
+                <th className="py-3 px-4 font-medium">{t('de.table.col.listings')}</th>
+                <th className="py-3 px-4 font-medium">{t('de.table.col.median')}</th>
+                <th className="py-3 px-4 font-medium">{t('de.table.col.iqr')}</th>
+                <th className="py-3 px-4 rounded-r-full font-medium">{t('de.table.col.status')}</th>
               </tr>
             </thead>
             <tbody className="text-[14px]">
               {rows.map((r) => (
                 <tr
                   key={r.county}
-                  className={`hover:bg-surface-container-low/40 transition-colors ${r.modelReady ? '' : 'opacity-70'}`}
+                  className={`hover:bg-surface-container-low/40 transition-colors ${r.modelReady !== false ? '' : 'opacity-70'}`}
                 >
                   <td className="py-3 px-4 font-body-medium text-on-surface font-medium flex items-center gap-2">
-                    {r.modelReady && <span className="w-1.5 h-1.5 rounded-full bg-primary-container" />}
-                    <span className={r.modelReady ? 'text-on-surface' : 'text-secondary'}>{r.county}</span>
+                    {r.modelReady === true && <span className="w-1.5 h-1.5 rounded-full bg-primary-container" />}
+                    <span className={r.modelReady === false ? 'text-secondary' : 'text-on-surface'}>{r.county}</span>
                   </td>
-                  <td className={`py-3 px-4 font-semibold ${r.modelReady ? 'text-on-surface' : 'text-secondary'}`}>
-                    {r.nListings}
+                  <td className={`py-3 px-4 font-semibold ${r.modelReady === false ? 'text-secondary' : 'text-on-surface'}`}>
+                    {formatNumber(r.nListings)}
                   </td>
-                  <td className={`py-3 px-4 ${r.modelReady ? 'text-on-surface' : 'text-secondary'}`}>
-                    {r.median != null ? compactKSh(r.median) : '—'}
+                  <td className={`py-3 px-4 ${r.modelReady === false ? 'text-secondary' : 'text-on-surface'}`}>
+                    {r.median != null ? formatCompactMoney(r.median, currency) : '—'}
                   </td>
                   <td className="py-3 px-4 text-secondary">
                     {r.q1 != null && r.q3 != null
-                      ? `${shortNum(r.q1)} – ${shortNum(r.q3)}`
+                      ? `${formatCompactMoney(r.q1, currency).replace(/^(KSh|\$)\s*/, '')} – ${formatCompactMoney(r.q3, currency).replace(/^(KSh|\$)\s*/, '')}`
                       : '—'}
                   </td>
                   <td className="py-3 px-4">
-                    {r.modelReady ? (
+                    {r.modelReady === true ? (
                       <span className="inline-flex items-center gap-1.5 bg-tertiary/10 text-tertiary text-[12px] px-3 py-0.5 rounded-full font-body-medium">
                         <span className="w-1.5 h-1.5 rounded-full bg-tertiary" />
-                        Model Ready
+                        {t('de.table.status.ready')}
                       </span>
-                    ) : (
+                    ) : r.modelReady === false ? (
                       <span className="inline-flex items-center gap-1.5 bg-surface-container-high text-secondary text-[12px] px-3 py-0.5 rounded-full font-body-medium">
                         <span className="w-1.5 h-1.5 rounded-full bg-secondary" />
-                        Not enough data
+                        {t('de.table.status.notEnough')}
+                      </span>
+                    ) : (
+                      // Null threshold: honest "threshold not available"
+                      // instead of a guessed status (P7b-A).
+                      <span className="text-secondary font-caption-sm text-caption-sm" title={t('de.table.status.unavailable')}>
+                        —
                       </span>
                     )}
                   </td>
@@ -343,23 +395,29 @@ export function CountyTableCard({
         {/* Mobile (below md): summary rows instead of the wide table. */}
         <div className="flex flex-col gap-2 md:hidden mt-2">
           {rows.map((r) => (
-            <div key={r.county} className={`flex justify-between items-center p-3 rounded-lg bg-surface-container-low ${r.modelReady ? '' : 'opacity-70'}`}>
+            <div
+              key={r.county}
+              className={`flex justify-between items-center p-3 rounded-lg bg-surface-container-low ${r.modelReady !== false ? '' : 'opacity-70'}`}
+            >
               <div className="flex flex-col">
-                <span className={`font-body-medium text-body-medium ${r.modelReady ? 'text-on-surface' : 'text-secondary'}`}>
+                <span className={`font-body-medium text-body-medium ${r.modelReady === false ? 'text-secondary' : 'text-on-surface'}`}>
                   {r.county}
                 </span>
                 <span className="font-caption-sm text-caption-sm text-secondary">
-                  {r.nListings} listings{r.median != null ? ` · median ${compactKSh(r.median)}` : ''}
+                  {t('de.samples.listings', { n: formatNumber(r.nListings) })}
+                  {r.median != null ? ` · ${t('de.price.median', { value: formatCompactMoney(r.median, currency) })}` : ''}
                 </span>
               </div>
-              {r.modelReady ? (
+              {r.modelReady === true ? (
                 <span className="inline-flex items-center gap-1.5 bg-tertiary/10 text-tertiary text-[12px] px-3 py-0.5 rounded-full font-body-medium">
-                  Model Ready
+                  {t('de.table.status.ready')}
+                </span>
+              ) : r.modelReady === false ? (
+                <span className="inline-flex items-center gap-1.5 bg-surface-container-high text-secondary text-[12px] px-3 py-0.5 rounded-full font-body-medium">
+                  {t('de.table.status.notEnough')}
                 </span>
               ) : (
-                <span className="inline-flex items-center gap-1.5 bg-surface-container-high text-secondary text-[12px] px-3 py-0.5 rounded-full font-body-medium">
-                  Not enough data
-                </span>
+                <span className="text-secondary font-caption-sm text-caption-sm">—</span>
               )}
             </div>
           ))}
@@ -368,18 +426,18 @@ export function CountyTableCard({
         {/* Pagination footer. */}
         <div className="flex flex-col sm:flex-row items-center justify-between pt-2 text-secondary font-caption-sm text-caption-sm gap-2">
           <div className="flex items-center gap-2 flex-wrap justify-center">
-            <span>
-              Showing {rows.length > 0 ? (tablePage - 1) * rows.length + 1 : 0}–{(tablePage - 1) * rows.length + rows.length} of {totalRows} counties
-            </span>
+            <span>{t('de.table.showing', { from: formatNumber(from), to: formatNumber(to), total: formatNumber(totalRows) })}</span>
             <span>•</span>
             <span className="font-medium text-on-surface">
-              {nModelReady} counties meet the ≥{threshold} listings threshold
+              {nModelReady != null && threshold != null
+                ? t('de.table.meets', { n: formatNumber(nModelReady), threshold: formatNumber(threshold) })
+                : t('de.table.meetsUnavailable')}
             </span>
           </div>
           <div className="flex items-center gap-1">
             <button
               type="button"
-              aria-label="Previous page"
+              aria-label={t('de.table.prevPage')}
               disabled={tablePage <= 1}
               onClick={() => onPage(tablePage - 1)}
               className="w-8 h-8 rounded-full flex items-center justify-center bg-surface-container hover:bg-surface-container-high text-on-surface transition-all disabled:opacity-40"
@@ -387,11 +445,11 @@ export function CountyTableCard({
               <span className="material-symbols-outlined text-[16px]">chevron_left</span>
             </button>
             <span className="px-2 font-medium text-on-surface">
-              Page {tablePage} of {totalPages}
+              {t('de.table.page', { page: tablePage, total: totalPages })}
             </span>
             <button
               type="button"
-              aria-label="Next page"
+              aria-label={t('de.table.nextPage')}
               disabled={tablePage >= totalPages}
               onClick={() => onPage(tablePage + 1)}
               className="w-8 h-8 rounded-full flex items-center justify-center bg-surface-container hover:bg-surface-container-high text-on-surface transition-all disabled:opacity-40"
@@ -428,20 +486,22 @@ export function SampleRecordsCard({
   isError: boolean;
   onRetry: () => void;
 }) {
+  const { t } = useTranslation();
+  const { currency } = useCurrency();
   return (
     <ValuationCard noPadding>
       <div className="p-space-lg flex flex-col space-y-4">
         <div className="flex items-center justify-between">
           <div className="flex flex-col">
             <span className="font-title-card text-title-card text-on-surface font-medium">
-              Listing sample records
+              {t('de.samples.title')}
             </span>
             <span className="font-label-metric text-label-metric text-on-surface-variant">
-              Validated tabular inputs
+              {t('de.samples.subtitle')}
             </span>
           </div>
           <span className="font-caption-sm text-caption-sm text-secondary">
-            First {rows.length || '—'} of the scored feed
+            {rows.length > 0 ? t('de.samples.count', { n: rows.length }) : t('de.samples.countUnavailable')}
           </span>
         </div>
 
@@ -450,17 +510,17 @@ export function SampleRecordsCard({
         ) : isError ? (
           <EmptyState
             icon="cloud_off"
-            title="Couldn't load sample records"
-            message="The scored listings feed is unavailable."
-            actionLabel="Retry"
+            title={t('de.samples.errorTitle')}
+            message={t('de.samples.errorMessage')}
+            actionLabel={t('common.retry')}
             onAction={onRetry}
           />
         ) : rows.length === 0 ? (
-          <p className="text-caption-sm text-secondary py-2">No sample records available.</p>
+          <p className="text-caption-sm text-secondary py-2">{t('de.samples.empty')}</p>
         ) : (
           <div className="space-y-3 pt-1">
             {rows.map((r, i) => {
-              const name = r.title || r.location || r.county || `Listing ${i + 1}`;
+              const name = r.title || r.location || r.county || t('de.samples.fallbackName', { n: i + 1 });
               const sub = [`${r.size_acres} ac`, r.prop_type].filter(Boolean).join(' • ');
               return (
                 <div
@@ -476,20 +536,22 @@ export function SampleRecordsCard({
                     </div>
                     {r.data_quality_flag ? (
                       <span className="px-2.5 py-1 rounded-full bg-primary-fixed text-on-primary-fixed font-label-metric text-label-metric font-medium flex items-center gap-1">
-                        <span className="material-symbols-outlined text-[13px]">flag</span> Flagged
+                        <span className="material-symbols-outlined text-[13px]">flag</span>{' '}
+                        {t('de.samples.flagged')}
                       </span>
                     ) : (
                       <span className="px-2.5 py-1 rounded-full bg-tertiary-fixed text-on-tertiary-fixed font-label-metric text-label-metric font-medium flex items-center gap-1">
-                        <span className="material-symbols-outlined text-[13px]">verified</span> Verified clean
+                        <span className="material-symbols-outlined text-[13px]">verified</span>{' '}
+                        {t('de.samples.clean')}
                       </span>
                     )}
                   </div>
                   <div className="flex items-center justify-between pt-1">
                     <span className="font-label-metric text-label-metric text-on-surface-variant">
-                      Asking price
+                      {t('de.samples.asking')}
                     </span>
                     <span className="font-body-medium text-body-medium text-primary font-bold">
-                      {compactKSh(r.listed_price_per_acre_ksh)} / ac
+                      {t('de.samples.perAcre', { value: formatCompactMoney(r.listed_price_per_acre_ksh, currency) })}
                     </span>
                   </div>
                 </div>
@@ -503,6 +565,6 @@ export function SampleRecordsCard({
 }
 
 /** Small helper so sections can be conditionally wrapped without noise. */
-export function Section({ children }: { children: ReactNode }) {
+export function Section({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }

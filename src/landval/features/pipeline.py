@@ -228,6 +228,8 @@ class FeaturePipeline:
 
         # ---- Assemble features dict ----
         features: dict[str, float | str | None] = {
+            "latitude": lat,
+            "longitude": lon,
             "log_size_acres": log_size_acres,
             "dist_to_nairobi_km": dist_nairobi,
             "dist_to_county_town_km": dist_county_town,

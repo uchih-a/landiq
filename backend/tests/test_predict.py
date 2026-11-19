@@ -785,9 +785,11 @@ class TestLiveExplanationService:
         monkeypatch.setattr(
             shap,
             "TreeExplainer",
-            lambda model, **_kw: _StubExplainer([0.10, -0.05, 0.20, 0.0, 0.0], 13.0)
-            if model.log_pred == 13.0
-            else _StubExplainer([0.15, -0.10, 0.18, 0.0, 0.0], 14.0),
+            lambda model, **_kw: (
+                _StubExplainer([0.10, -0.05, 0.20, 0.0, 0.0], 13.0)
+                if model.log_pred == 13.0
+                else _StubExplainer([0.15, -0.10, 0.18, 0.0, 0.0], 14.0)
+            ),
         )
 
         from landval.modelling.explain import LiveExplanationService

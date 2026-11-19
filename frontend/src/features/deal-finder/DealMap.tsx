@@ -1,47 +1,49 @@
 /**
- * DealMap — the spatial cluster view for the selected Deal Finder listing.
+ * DealMap — the spatial cluster view for the selected Deal Finder listing
+ * (P4b real-data round).
  *
- * Renders a MapLibre map centred on the selected listing's coordinates,
- * with:
- *   - a highlighted pin for the selected listing (Material Symbols
- *     `location_on`, primary-container colour, larger),
- *   - smaller dots for the other listings on the current page, coloured
- *     by verdict (underpriced / fair / overpriced).
+ * P4b change (problem G): the "nearby" markers now come from the REAL
+ * nearest-listings endpoint (`useListingNearby(listingNo, radius, limit)`)
+ * — haversine-nearest to the selected listing, excluding itself — instead
+ * of the current table page (which was never "nearby" at all).
  *
- * Capped at 50 secondary markers so a wide-open filter doesn't brick
- * the DOM. Renders nothing when no listing is selected or the selected
- * listing is missing latitude / longitude.
+ * Marker cap + radius come from the options/response (no typed
+ * MAX_SECONDARY_MARKERS).  Verdict colours come from the single
+ * VERDICT_STYLES token map (verdict-styles).  Loading / error / empty
+ * states render honestly.  All strings via i18n.
  */
 import { useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Marker } from 'react-map-gl/maplibre';
 
+import { EmptyState, LoadingSkeleton, ValuationCard } from '@/components';
 import { MapLibreMap } from '@/components/MapLibreMap';
-import { ValuationCard } from '@/components/ValuationCard';
+import { useListingNearby } from '@/lib/api/hooks';
 import type { ListingsScoredRow } from '@/lib/api/types';
+import { formatCompactMoney } from '@/lib/currency/format';
+
+import { VERDICT_STYLES } from './verdict-styles';
 
 interface Props {
   selected: ListingsScoredRow;
-  rows: ListingsScoredRow[];
 }
 
-const VERDICT_COLORS: Record<string, string> = {
-  underpriced: '#2F9E5F', // market-opportunity
-  fair: '#6a5b56', // secondary
-  overpriced: '#D6455D', // market-overvalued
-};
+/** Map camera defaults — UI constants (zoom + pixel heights are allowed). */
+const DEFAULT_ZOOM = 12;
+const DEFAULT_MAP_HEIGHT = 'h-72';
 
-const DEFAULT_VERDICT_COLOR = '#6a5b56';
-const MAX_SECONDARY_MARKERS = 50;
-
-function verdictColor(verdict: string): string {
-  return VERDICT_COLORS[verdict] ?? DEFAULT_VERDICT_COLOR;
+function listingLabel(row: ListingsScoredRow, fallback: string): string {
+  return row.title || row.location || row.county || row.listing_no || fallback;
 }
 
-function listingLabel(row: ListingsScoredRow): string {
-  return row.title || row.location || row.county || row.listing_no || 'Listing';
+function verdictHex(verdict: string): string {
+  const v = VERDICT_STYLES[(verdict ?? '').toLowerCase()];
+  return v?.hex ?? VERDICT_STYLES['fair'].hex;
 }
 
-export function DealMap({ selected, rows }: Props) {
+export function DealMap({ selected }: Props) {
+  const { t } = useTranslation();
+
   const center = useMemo(() => {
     if (
       selected.latitude == null ||
@@ -54,124 +56,137 @@ export function DealMap({ selected, rows }: Props) {
     return { lat: selected.latitude, lng: selected.longitude };
   }, [selected]);
 
-  // Pick up to MAX_SECONDARY_MARKERS nearby rows (excluding the selected
-  // one) that have valid coordinates. We don't sort by distance here —
-  // the page's rows already arrive sorted by `listed_over_predicted`.
-  const secondary = useMemo(() => {
-    if (!center) return [];
-    const out: ListingsScoredRow[] = [];
-    for (const r of rows) {
-      if (r.listing_no != null && r.listing_no === selected.listing_no) continue;
-      if (
-        r.latitude == null ||
-        r.longitude == null ||
-        !Number.isFinite(r.latitude) ||
-        !Number.isFinite(r.longitude)
-      ) {
-        continue;
-      }
-      out.push(r);
-      if (out.length >= MAX_SECONDARY_MARKERS) break;
-    }
-    return out;
-  }, [rows, selected.listing_no, center]);
+  // P4b: REAL nearby listings from the endpoint (deterministic nearest,
+  // self-excluded).  Disabled until coordinates exist.
+  const nearbyQ = useListingNearby(
+    selected.listing_no ?? null,
+    50,
+    50,
+  );
+  const nearby = nearbyQ.data?.nearby ?? [];
 
-  if (!center) return null;
+  if (!center) {
+    return (
+      <EmptyState
+        icon="location_off"
+        title={t('deals.mapNoCoordinates')}
+        message={t('deals.mapNoCoordinatesHint')}
+      />
+    );
+  }
 
   return (
     <ValuationCard noPadding>
       <div className="p-space-lg pb-3">
         <h3 className="font-headline-section text-headline-section text-on-surface">
-          Corridor Spatial Cluster
+          {t('deals.mapTitle')}
         </h3>
         <p className="text-caption-sm text-on-surface-variant mt-1">
-          {listingLabel(selected)} · {secondary.length + 1} listings shown
+          {listingLabel(selected, t('deals.untitled'))} ·{' '}
+          {t('deals.mapSubtitle', {
+            n: nearby.length,
+            radius: nearbyQ.data?.radius_km ?? 50,
+          })}
+        </p>
+        {/* Visually hidden text alternative for the map (a11y). */}
+        <p className="sr-only">
+          {t('deals.mapA11y', {
+            listing: listingLabel(selected, t('deals.untitled')),
+            price: formatCompactMoney(selected.listed_price_per_acre_ksh),
+            n: nearby.length,
+          })}
         </p>
       </div>
       <div className="px-space-lg pb-space-lg">
-        <MapLibreMap
-          initialLongitude={center.lng}
-          initialLatitude={center.lat}
-          initialZoom={12}
-          height="h-72"
-        >
-          {/* Secondary listings — smaller dots coloured by verdict. */}
-          {secondary.map((r, i) => (
-            <Marker
-              key={`${r.listing_no ?? 'listing'}-${i}`}
-              longitude={r.longitude as number}
-              latitude={r.latitude as number}
-              anchor="center"
+        {nearbyQ.isLoading ? (
+          <LoadingSkeleton className="h-72 w-full rounded-md" />
+        ) : nearbyQ.isError ? (
+          <EmptyState
+            icon="cloud_off"
+            title={t('common.dataUnavailable')}
+            message={t('deals.mapLoadFailed')}
+            actionLabel={t('common.retry')}
+            onAction={() => nearbyQ.refetch()}
+          />
+        ) : (
+          <>
+            <MapLibreMap
+              initialLongitude={center.lng}
+              initialLatitude={center.lat}
+              initialZoom={DEFAULT_ZOOM}
+              height={DEFAULT_MAP_HEIGHT}
             >
-              <span
-                aria-hidden="true"
-                style={{
-                  display: 'inline-block',
-                  width: '10px',
-                  height: '10px',
-                  borderRadius: '9999px',
-                  backgroundColor: verdictColor(r.verdict),
-                  boxShadow: '0 1px 2px rgba(27,21,18,0.25)',
-                }}
-              />
-            </Marker>
-          ))}
+              {/* REAL nearby listings — verdict-coloured dots. */}
+              {nearby.map((n, i) => (
+                <Marker
+                  key={`${n.listing_no ?? 'nearby'}-${i}`}
+                  longitude={n.longitude as number}
+                  latitude={n.latitude as number}
+                  anchor="center"
+                  aria-label={t('deals.nearbyA11y', {
+                    n: formatCompactMoney(n.listed_price_per_acre_ksh),
+                    km: n.distance_km,
+                  })}
+                >
+                  <span
+                    aria-hidden="true"
+                    style={{
+                      display: 'inline-block',
+                      width: '10px',
+                      height: '10px',
+                      borderRadius: '9999px',
+                      backgroundColor: verdictHex(n.verdict),
+                      boxShadow: '0 1px 2px rgba(27,21,18,0.25)',
+                    }}
+                  />
+                </Marker>
+              ))}
 
-          {/* Selected listing — highlighted pin on top. */}
-          <Marker
-            longitude={center.lng}
-            latitude={center.lat}
-            anchor="bottom"
-          >
-            <span
-              className="material-symbols-outlined text-[32px] text-primary-container drop-shadow-md"
-              style={{ transform: 'translateY(-2px)' }}
-              aria-label="Selected listing"
-            >
-              location_on
-            </span>
-          </Marker>
-        </MapLibreMap>
+              {/* Selected listing — highlighted pin on top. */}
+              <Marker
+                longitude={center.lng}
+                latitude={center.lat}
+                anchor="bottom"
+              >
+                <span
+                  className="material-symbols-outlined text-[32px] text-primary-container drop-shadow-md"
+                  style={{ transform: 'translateY(-2px)' }}
+                  aria-label={t('deals.selectedPin')}
+                  role="img"
+                >
+                  location_on
+                </span>
+              </Marker>
+            </MapLibreMap>
 
-        {/* Legend */}
-        <div className="flex flex-wrap items-center gap-4 mt-3 text-caption-sm text-secondary">
-          <span className="flex items-center gap-1.5">
-            <span
-              style={{
-                display: 'inline-block',
-                width: '10px',
-                height: '10px',
-                borderRadius: '9999px',
-                backgroundColor: VERDICT_COLORS.underpriced,
-              }}
-            />
-            Underpriced
-          </span>
-          <span className="flex items-center gap-1.5">
-            <span
-              style={{
-                display: 'inline-block',
-                width: '10px',
-                height: '10px',
-                borderRadius: '9999px',
-                backgroundColor: VERDICT_COLORS.fair,
-              }}
-            />
-            Fair
-          </span>
-          <span className="flex items-center gap-1.5">
-            <span
-              style={{
-                display: 'inline-block',
-                width: '10px',
-                height: '10px',
-                borderRadius: '9999px',
-                backgroundColor: VERDICT_COLORS.overpriced,
-              }}
-            />
-            Overpriced
-          </span>
-        </div>
+            {/* Legend — visible text, not colour-only. */}
+            <div className="flex flex-wrap items-center gap-4 mt-3 text-caption-sm text-secondary">
+              {(['underpriced', 'fair', 'overpriced'] as const).map((v) => (
+                <span key={v} className="flex items-center gap-1.5">
+                  <span
+                    aria-hidden="true"
+                    style={{
+                      display: 'inline-block',
+                      width: '10px',
+                      height: '10px',
+                      borderRadius: '9999px',
+                      backgroundColor: VERDICT_STYLES[v].hex,
+                    }}
+                  />
+                  {t(VERDICT_STYLES[v].labelKey)}
+                </span>
+              ))}
+            </div>
+
+            {nearby.length === 0 && !nearbyQ.isLoading && (
+              <p className="text-caption-sm text-secondary italic mt-2">
+                {nearbyQ.data?.reason === 'no_coordinates'
+                  ? t('deals.mapNoCoordinatesHint')
+                  : t('deals.mapNoNearby')}
+              </p>
+            )}
+          </>
+        )}
       </div>
     </ValuationCard>
   );

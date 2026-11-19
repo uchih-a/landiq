@@ -15,6 +15,10 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from app.schemas.health import FlagDefinition
+
+__all__ = ["FlagDefinition", "PriceBin", "PricePercentiles", "PriceDistributionResponse"]
+
 
 class PriceBin(BaseModel):
     """One histogram bin on the log10 price axis.
@@ -51,6 +55,10 @@ class PriceDistributionResponse(BaseModel):
     pre-cleaning "observed corpus" count is NOT here — that number does not
     exist anywhere the backend loads; the frontend marks that tile
     unavailable.
+
+    ``flag_definition`` (P7b) carries the flagged-listing percentile window
+    (from the canonical constants) so the UI can explain the flag without
+    typing "1st–99th".
     """
 
     n_bins: int = Field(..., description="Number of histogram bins returned")
@@ -61,4 +69,12 @@ class PriceDistributionResponse(BaseModel):
     )
     n_flagged: int = Field(
         ..., description="Listings flagged by data_quality_flag (excluded from training)"
+    )
+    flag_definition: FlagDefinition | None = Field(
+        None,
+        description=(
+            "The flag rule (percentile window) from the canonical constants — "
+            "always served by the router; nullable for schema-level backward "
+            "compatibility."
+        ),
     )

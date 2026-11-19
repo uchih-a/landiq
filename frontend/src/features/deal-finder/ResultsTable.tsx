@@ -1,24 +1,18 @@
 /**
- * ResultsTable — the Deal Finder scored-listings table.
+ * ResultsTable — the Deal Finder scored-listings table (P4b real-data round).
  *
- * P4 fidelity pass: column set updated to match 06_deal_finder/code.html:
- *  - Listing & Location (with leading orange dot on selected row)
- *  - Size (acres)
- *  - Asking / ac (with Total price subtitle)
- *  - Model estimate (with 80% range subtitle)
- *  - Verdict (chip with percentage: "-28% Under", "+4% Fair", "+15% Over")
- *  - Notice (warning icon for data_quality_flag, em-dash otherwise)
- *
- * Selected row uses `bg-primary-fixed/20` with a leading orange dot
- * (`bg-primary-container ring-4 ring-primary-fixed/40`) per the design.
- *
- * The verdict percentage is computed as:
- *   pct = round((listed - predicted) / predicted × 100)
- *   Underpriced: shows "-28% Under" (pct is negative)
- *   Fair: shows "+4% Fair" (pct is near zero)
- *   Overpriced: shows "+15% Over" (pct is positive)
- *
- * Loading / error / empty states render per the F1 pattern.
+ * Changes:
+ *  - The sort button toggles the SERVER-side sort (sort + order params);
+ *    no client re-sort.  The button carries aria-sort semantics.
+ *  - Every user-visible string via i18n; numbers via the locale helper;
+ *    money via the currency-aware compact formatter.
+ *  - The verdict chip percentage stays (computed from the row's own
+ *    listed/predicted fields — per-row data, not a corpus statistic).
+ *  - Row selection reachable by keyboard (Enter/Space via the row's
+ *    onClick on a focusable tr with tabIndex + role).
+ *  - Empty state offers "Clear filters" (wired by the parent).
+ *  - The verdict chip + dot colours come from the single token map
+ *    (the verdict-styles module — UI constants defined once).
  */
 import { useTranslation } from 'react-i18next';
 
@@ -30,6 +24,8 @@ import {
 import { getErrorState } from '@/lib/api/hooks';
 import type { ListingsScoredRow } from '@/lib/api/types';
 import { formatCompactMoney } from '@/lib/currency/format';
+import { useLocale } from '@/lib/i18n/useLocale';
+import { verdictStyle } from './verdict-styles';
 
 interface Props {
   isLoading: boolean;
@@ -39,12 +35,14 @@ interface Props {
   selectedListingNo: string | null;
   onRowClick: (row: ListingsScoredRow) => void;
   onRetry: () => void;
+  sortKey: string;
   sortAsc: boolean;
   onSortToggle: () => void;
   totalRows: number;
   county: string;
   currentPage: number;
   pageSize: number;
+  onPageChange: (p: number) => void;
 }
 
 function verdictPct(row: ListingsScoredRow): number {
@@ -56,25 +54,11 @@ function verdictPct(row: ListingsScoredRow): number {
   );
 }
 
-function verdictChipClass(verdict: string): string {
+function verdictShortKey(verdict: string): string {
   const v = (verdict ?? '').toLowerCase();
-  if (v === 'underpriced') return 'bg-[#E8F5E9] text-[#2D6A4F]';
-  if (v === 'overpriced') return 'bg-[#FBEBE8] text-[#C84B31]';
-  return 'bg-surface-container text-[#5C5752]';
-}
-
-function verdictDotColor(verdict: string): string {
-  const v = (verdict ?? '').toLowerCase();
-  if (v === 'underpriced') return '#2D6A4F';
-  if (v === 'overpriced') return '#C84B31';
-  return '#5C5752';
-}
-
-function verdictLabel(verdict: string): string {
-  const v = (verdict ?? '').toLowerCase();
-  if (v === 'underpriced') return 'Under';
-  if (v === 'overpriced') return 'Over';
-  return 'Fair';
+  if (v === 'underpriced') return 'deals.verdictShort.under';
+  if (v === 'overpriced') return 'deals.verdictShort.over';
+  return 'deals.verdictShort.fair';
 }
 
 export function ResultsTable({
@@ -91,8 +75,10 @@ export function ResultsTable({
   county,
   currentPage,
   pageSize,
+  onPageChange,
 }: Props) {
   const { t } = useTranslation();
+  const locale = useLocale();
 
   if (isLoading) {
     return (
@@ -108,7 +94,7 @@ export function ResultsTable({
     return (
       <EmptyState
         icon={state.type === 'rate_limit' ? 'hourglass_top' : 'cloud_off'}
-        title={state.type === 'rate_limit' ? 'Too many requests' : t('common.dataUnavailable')}
+        title={state.type === 'rate_limit' ? t('predictor.tooManyRequests') : t('common.dataUnavailable')}
         message={state.message}
         actionLabel={t('common.retry')}
         onAction={onRetry}
@@ -119,13 +105,14 @@ export function ResultsTable({
     return (
       <EmptyState
         icon="search_off"
-        title="No matches"
-        message="No scored listings match the current filters. Try widening the county or verdict filter."
+        title={t('deals.emptyTitle')}
+        message={t('deals.emptyMessage')}
       />
     );
   }
 
-  const countyLabel = county && county !== 'all' ? ` • ${county} corridor focus` : '';
+  const totalPages = Math.max(1, Math.ceil(totalRows / pageSize));
+  const countyLabel = county && county !== 'all' ? ` · ${county}` : '';
   const startIdx = (currentPage - 1) * pageSize + 1;
   const endIdx = Math.min(currentPage * pageSize, totalRows);
 
@@ -136,30 +123,44 @@ export function ResultsTable({
         <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 gap-3">
           <div>
             <h2 className="font-headline-section text-headline-section text-on-surface">
-              Available Deals
+              {t('deals.availableDeals')}
             </h2>
             <p className="font-caption-sm text-caption-sm text-secondary">
-              Showing {startIdx}-{endIdx} of {totalRows.toLocaleString('en-KE')} listings{countyLabel}
+              {t('deals.showingRange', {
+                start: startIdx.toLocaleString(locale),
+                end: endIdx.toLocaleString(locale),
+                total: totalRows.toLocaleString(locale),
+                county: countyLabel,
+              })}
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <span className="font-label-metric text-label-metric text-secondary">Sorted by:</span>
+            <span className="font-label-metric text-label-metric text-secondary">
+              {t('deals.sortedBy')}:
+            </span>
+            {/* P4b: server-side sort toggle — sends sort+order to the API
+                (the table order IS the server order; no client re-sort). */}
             <button
               type="button"
               onClick={onSortToggle}
+              aria-label={sortAsc ? t('deals.sortAsc') : t('deals.sortDesc')}
+              aria-sort={sortAsc ? 'ascending' : 'descending'}
               className="h-9 px-3.5 rounded-full bg-surface-container-low text-xs font-semibold text-on-surface inline-flex items-center gap-1.5 hover:bg-surface-container transition-colors"
             >
-              {sortAsc ? 'Best Value first' : 'Worst Value first'}
-              <span className="material-symbols-outlined text-[16px]">arrow_drop_down</span>
+              {sortAsc ? t('deals.bestValueFirst') : t('deals.worstValueFirst')}
+              <span className="material-symbols-outlined text-[16px]" aria-hidden="true">
+                arrow_drop_down
+              </span>
             </button>
           </div>
         </div>
 
-        {/* Deals table — uses negative margins to break out of the card's
-            p-space-md padding so the table gets the full card width.
-            (Per design: `overflow-x-auto -mx-space-md px-space-md`) */}
+        {/* Deals table — negative margins break out of the card padding. */}
         <div className="overflow-x-auto -mx-space-md px-space-md">
           <table className="w-full text-left border-collapse table-fixed">
+            <caption className="sr-only">
+              {t('deals.tableCaption', { n: totalRows.toLocaleString(locale) })}
+            </caption>
             <colgroup>
               <col className="w-auto" />
               <col className="w-[70px]" />
@@ -170,33 +171,52 @@ export function ResultsTable({
             </colgroup>
             <thead>
               <tr className="bg-surface-container-low/60 text-secondary font-label-uppercase text-label-uppercase">
-                <th className="py-3 px-3.5 rounded-l-DEFAULT">Listing &amp; Location</th>
-                <th className="py-3 px-3">Size</th>
-                <th className="py-3 px-3">Asking / ac</th>
-                <th className="py-3 px-3">Model estimate</th>
-                <th className="py-3 px-3">Verdict</th>
-                <th className="py-3 px-3 rounded-r-DEFAULT text-center" title="Quality / Anomaly flag">Notice</th>
+                <th className="py-3 px-3.5 rounded-l-DEFAULT">{t('deals.colListing')}</th>
+                <th className="py-3 px-3">{t('deals.colSize')}</th>
+                <th className="py-3 px-3">{t('deals.colAsking')}</th>
+                <th className="py-3 px-3">{t('deals.colEstimate')}</th>
+                <th className="py-3 px-3">{t('deals.colVerdict')}</th>
+                <th
+                  className="py-3 px-3 rounded-r-DEFAULT text-center"
+                  title={t('deals.colNoticeTitle')}
+                >
+                  {t('deals.colNotice')}
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-surface-container">
               {rows.map((r) => {
                 const isSel = selectedListingNo != null && r.listing_no === selectedListingNo;
-                const title = r.title || r.location || r.county || r.listing_no || 'Untitled listing';
+                const title = r.title || r.location || r.county || r.listing_no || t('deals.untitled');
                 const subtitle = [r.location, r.county].filter(Boolean).join(' · ');
                 const pct = verdictPct(r);
                 const total = r.price_ksh != null ? r.price_ksh : r.listed_price_per_acre_ksh * r.size_acres;
                 const pctSign = pct >= 0 ? '+' : '';
+                const vStyle = verdictStyle(r.verdict);
                 return (
                   <tr
                     key={r.listing_no ?? `${r.title}-${r.size_acres}`}
                     onClick={() => onRowClick(r)}
-                    className={`cursor-pointer transition-colors group ${
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        onRowClick(r);
+                      }
+                    }}
+                    tabIndex={0}
+                    role="button"
+                    aria-label={t('deals.rowA11y', {
+                      title,
+                      price: formatCompactMoney(r.listed_price_per_acre_ksh),
+                      verdict: t(vStyle.labelKey),
+                    })}
+                    className={`cursor-pointer transition-colors group focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-container ${
                       isSel
                         ? 'bg-primary-fixed/20 hover:bg-primary-fixed/30'
                         : 'hover:bg-surface-container-low'
                     }`}
                   >
-                    {/* Listing & Location — with leading orange dot on selected row */}
+                    {/* Listing & Location */}
                     <td className="py-3.5 px-3.5">
                       <div className="flex items-start gap-2.5">
                         {isSel && (
@@ -211,7 +231,9 @@ export function ResultsTable({
                           </div>
                           {subtitle && (
                             <div className="font-caption-sm text-caption-sm text-secondary flex items-center gap-1">
-                              <span className="material-symbols-outlined text-[13px]">location_on</span>
+                              <span className="material-symbols-outlined text-[13px]" aria-hidden="true">
+                                location_on
+                              </span>
                               {subtitle}
                             </div>
                           )}
@@ -220,44 +242,49 @@ export function ResultsTable({
                     </td>
                     {/* Size */}
                     <td className="py-3.5 px-3 font-body-regular text-body-regular text-on-surface whitespace-nowrap">
-                      {r.size_acres.toLocaleString('en-KE')} ac
+                      {t('deals.acres', { n: r.size_acres.toLocaleString(locale) })}
                     </td>
-                    {/* Asking / ac — with Total price subtitle */}
+                    {/* Asking / ac */}
                     <td className="py-3.5 px-3 whitespace-nowrap">
                       <div className="font-body-medium text-body-medium text-on-surface font-medium">
                         {formatCompactMoney(r.listed_price_per_acre_ksh)}
                       </div>
                       <div className="font-caption-sm text-caption-sm text-secondary">
-                        Total {formatCompactMoney(total)}
+                        {t('deals.total', { n: formatCompactMoney(total) })}
                       </div>
                     </td>
-                    {/* Model estimate — with 80% range subtitle */}
+                    {/* Model estimate */}
                     <td className="py-3.5 px-3 whitespace-nowrap">
                       <div className="font-body-medium text-body-medium text-on-surface">
                         {formatCompactMoney(r.predicted_price_per_acre_ksh)}
                       </div>
                       <div className="font-caption-sm text-caption-sm text-secondary">
-                        80%: {formatCompactMoney(r.low_price_per_acre_ksh)} - {formatCompactMoney(r.high_price_per_acre_ksh)}
+                        {t('deals.range', {
+                          low: formatCompactMoney(r.low_price_per_acre_ksh),
+                          high: formatCompactMoney(r.high_price_per_acre_ksh),
+                        })}
                       </div>
                     </td>
-                    {/* Verdict — chip with percentage */}
+                    {/* Verdict */}
                     <td className="py-3.5 px-3 whitespace-nowrap">
                       <span
-                        className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold ${verdictChipClass(r.verdict)}`}
+                        className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold ${vStyle.chip}`}
                       >
                         <span
                           className="w-1.5 h-1.5 rounded-full"
-                          style={{ backgroundColor: verdictDotColor(r.verdict) }}
+                          style={{ backgroundColor: vStyle.hex }}
+                          aria-hidden="true"
                         />
-                        {pctSign}{pct}% {verdictLabel(r.verdict)}
+                        {pctSign}
+                        {pct}% {t(verdictShortKey(r.verdict))}
                       </span>
                     </td>
-                    {/* Notice — warning icon for data_quality_flag */}
+                    {/* Notice */}
                     <td className="py-3.5 px-3 text-center">
                       {r.data_quality_flag ? (
                         <span
-                          className="material-symbols-outlined text-[17px] text-[#E3A008]"
-                          title="Asking price significantly departs from adjacent listings; inspect details"
+                          className="material-symbols-outlined text-[17px] text-market-caution"
+                          title={t('deals.noticeTitle')}
                         >
                           warning
                         </span>
@@ -270,6 +297,39 @@ export function ResultsTable({
               })}
             </tbody>
           </table>
+        </div>
+
+        {/* Pagination (server pages — page N+1 continues the server order). */}
+        <div className="flex items-center justify-between gap-4 pt-4">
+          <p className="text-caption-sm text-secondary">
+            {t('deals.showingRange', {
+              start: startIdx.toLocaleString(locale),
+              end: endIdx.toLocaleString(locale),
+              total: totalRows.toLocaleString(locale),
+              county: countyLabel,
+            })}
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              disabled={currentPage <= 1}
+              onClick={() => onPageChange(currentPage - 1)}
+              className="px-3 py-1.5 rounded-full bg-surface-container-low text-xs text-on-surface disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {t('deals.prev')}
+            </button>
+            <span className="text-label-metric font-label-metric text-on-surface tabular-nums">
+              {currentPage} / {totalPages}
+            </span>
+            <button
+              type="button"
+              disabled={currentPage >= totalPages}
+              onClick={() => onPageChange(currentPage + 1)}
+              className="px-3 py-1.5 rounded-full bg-surface-container-low text-xs text-on-surface disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {t('deals.next')}
+            </button>
+          </div>
         </div>
       </div>
     </ValuationCard>

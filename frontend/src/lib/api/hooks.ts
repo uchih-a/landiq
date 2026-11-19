@@ -40,6 +40,7 @@ import {
 import { apiClient } from './client';
 import { ApiError, RateLimitError } from './error';
 import type {
+  CountyDistanceProfileResponse,
   CountyListingsResponse,
   CountyRowCountsResponse,
   CountySummaryResponse,
@@ -48,14 +49,19 @@ import type {
   GeoJSONFeatureCollection,
   ErrorBySupportResponse,
   HealthResponse,
+  ListingsOptionsResponse,
   ListingsScoredFilters,
   ListingsScoredResponse,
+  NearbyListingsResponse,
   MetaResponse,
   MetricsResponse,
   ModelPredictionsResponse,
   NearbyPOICategory,
   NearbyPOIsResponse,
+  OverviewSummaryFilters,
+  OverviewSummaryResponse,
   PlaceSearchResponse,
+  PredictOptionsResponse,
   PredictRequest,
   PredictResponse,
   PriceDistributionResponse,
@@ -177,12 +183,47 @@ export function useMeta(): ApiQueryResult<MetaResponse> {
   });
 }
 
-/** GET /counties/summary — per-county median/IQR + small-n flag (Cell 9.5). */
-export function useCountySummary(): ApiQueryResult<CountySummaryResponse> {
+/**
+ * GET /counties/summary — per-county median/IQR + small-n flag (Cell 9.5),
+ * plus the P3b additions (property types, data-driven price bands,
+ * min_county_n).  The optional propType (canonical exact match) makes
+ * the aggregates reflect the filtered rows and recomputes the band
+ * edges so the legend always matches the map.
+ */
+export function useCountySummary(
+  propType?: string,
+): ApiQueryResult<CountySummaryResponse> {
+  const path = propType
+    ? `/counties/summary?prop_type=${encodeURIComponent(propType)}`
+    : '/counties/summary';
   return useApiQuery<CountySummaryResponse>({
-    queryKey: ['counties', 'summary'],
-    path: '/counties/summary',
+    queryKey: ['counties', 'summary', propType ?? 'all'],
+    path,
     staleTime: INF,
+  });
+}
+
+/**
+ * GET /counties/{county}/distance-profile (P3b) — whole-county distance
+ * profile: n, ranges, server-side OLS trend, and a deterministic
+ * unbiased sample (never a page of a sorted list).  Disabled until a
+ * county is picked.
+ */
+export function useCountyDistanceProfile(
+  county: string | null,
+  propType?: string,
+  limit: number = 400,
+): ApiQueryResult<CountyDistanceProfileResponse> {
+  const safeCounty = county?.trim() ?? '';
+  const params = new URLSearchParams();
+  if (propType) params.set('prop_type', propType);
+  params.set('limit', String(limit));
+  const path = `/counties/${encodeURIComponent(safeCounty)}/distance-profile?${params.toString()}`;
+  return useApiQuery<CountyDistanceProfileResponse>({
+    queryKey: ['counties', 'distance-profile', safeCounty, propType ?? 'all', limit],
+    path,
+    enabled: safeCounty !== '',
+    staleTime: 5 * 60_000,
   });
 }
 
@@ -277,6 +318,41 @@ export function usePriceDistribution(): ApiQueryResult<PriceDistributionResponse
   });
 }
 
+/**
+ * GET /overview/summary — the single read-only response that drives the
+ * Overview page (O1).  Returns totals, verdicts, by-property-type /
+ * by-size-band / by-distance-band breakdowns, log-linear trend,
+ * deterministic scatter sample, and top-N counties + Others — all
+ * computed over the WHOLE usable corpus in memory.
+ *
+ * The query key includes the serialised filters so changing county or
+ * prop_type creates a new cache entry while leaving the previous result
+ * visible via `keepPreviousData` (set in the queryClient defaults) —
+ * the page's filter UX stays smooth.
+ *
+ * The endpoint defaults to `top_n_counties=3` and `scatter_limit=400`
+ * server-side; we pass them through explicitly only when the caller
+ * overrides them.
+ */
+export function useOverviewSummary(
+  filters: OverviewSummaryFilters = {},
+): ApiQueryResult<OverviewSummaryResponse> {
+  const params = new URLSearchParams();
+  if (filters.county) params.set('county', filters.county);
+  if (filters.prop_type) params.set('prop_type', filters.prop_type);
+  if (filters.top_n_counties != null)
+    params.set('top_n_counties', String(filters.top_n_counties));
+  if (filters.scatter_limit != null)
+    params.set('scatter_limit', String(filters.scatter_limit));
+  const qs = params.toString();
+  const path = qs ? `/overview/summary?${qs}` : '/overview/summary';
+  return useApiQuery<OverviewSummaryResponse>({
+    queryKey: ['overview', 'summary', filters],
+    path,
+    staleTime: 5 * 60_000,
+  });
+}
+
 // ----------------------------------------------------------------------
 // Per-county listings — staleTime: 5 min (paginated)
 // ----------------------------------------------------------------------
@@ -323,6 +399,27 @@ export function usePredict() {
     mutationKey: ['predict'],
     mutationFn: (body: PredictRequest) =>
       apiClient.post<PredictResponse>('/predict', body),
+  });
+}
+
+/**
+ * GET /predict/options — the canonical lists + bounds + defaults the
+ * Predictor form renders (P2b).  Returns the property-type list (with
+ * per-type row counts), the parcel-size bounds (1st/99th percentile +
+ * median), the default + allowed confidence levels, and the ten
+ * infrastructure checklist keys — all from the backend so the frontend
+ * never re-types them.
+ *
+ * staleTime: Infinity — the data is static per load (the frame doesn't
+ * change between deploys).  The hook is enabled unconditionally; the
+ * caller renders an error state with retry when the request fails (it
+ * does NOT fall back to a built-in list).
+ */
+export function usePredictOptions(): ApiQueryResult<PredictOptionsResponse> {
+  return useApiQuery<PredictOptionsResponse>({
+    queryKey: ['predict', 'options'],
+    path: '/predict/options',
+    staleTime: INF,
   });
 }
 
@@ -419,6 +516,7 @@ export function buildListingsScoredQuery(filters: ListingsScoredFilters): string
   if (filters.near_amenity) params.set('near_amenity', filters.near_amenity);
   if (filters.radius_km != null) params.set('radius_km', String(filters.radius_km));
   if (filters.sort) params.set('sort', filters.sort);
+  if (filters.order) params.set('order', filters.order);
   const qs = params.toString();
   return qs ? `/listings/scored?${qs}` : '/listings/scored';
 }
@@ -439,6 +537,61 @@ export function useListingsScored(
     path,
     staleTime: LISTINGS_SCORED_STALE,
   });
+}
+
+/**
+ * GET /listings/options (P4b) — every list + limit + availability flag
+ * the filters bar renders.  staleTime: Infinity (static per load).
+ */
+export function useListingsOptions(): ApiQueryResult<ListingsOptionsResponse> {
+  return useApiQuery<ListingsOptionsResponse>({
+    queryKey: ['listings', 'options'],
+    path: '/listings/options',
+    staleTime: INF,
+  });
+}
+
+/**
+ * GET /listings/{listingNo}/nearby (P4b) — real nearest listings by
+ * haversine to the given listing (excluding itself).  Disabled until a
+ * listing is selected.  Also exports the download-URL builder for the
+ * streaming CSV export.
+ */
+export function useListingNearby(
+  listingNo: string | null,
+  radiusKm: number = 50,
+  limit: number = 50,
+): ApiQueryResult<NearbyListingsResponse> {
+  const safeNo = listingNo?.trim() ?? '';
+  const path = `/listings/${encodeURIComponent(safeNo)}/nearby?radius_km=${radiusKm}&limit=${limit}`;
+  return useApiQuery<NearbyListingsResponse>({
+    queryKey: ['listings', 'nearby', safeNo, radiusKm, limit],
+    path,
+    enabled: safeNo !== '',
+    staleTime: LISTINGS_SCORED_STALE,
+  });
+}
+
+/**
+ * Build the /listings/scored/export.csv URL for the CURRENT filters (P4b
+ * streaming export — no client page-walking).  Exported so the export
+ * button can build an anchor/blob download from the same serialization
+ * the table query uses.
+ */
+export function buildListingsExportUrl(filters: ListingsScoredFilters): string {
+  const params = new URLSearchParams();
+  if (filters.county) params.set('county', filters.county);
+  if (filters.prop_type) params.set('prop_type', filters.prop_type);
+  if (filters.verdict) params.set('verdict', filters.verdict);
+  if (filters.scored_by) params.set('scored_by', filters.scored_by);
+  if (filters.data_quality_flag != null)
+    params.set('data_quality_flag', String(filters.data_quality_flag));
+  if (filters.near_amenity) params.set('near_amenity', filters.near_amenity);
+  if (filters.radius_km != null) params.set('radius_km', String(filters.radius_km));
+  if (filters.sort) params.set('sort', filters.sort);
+  if (filters.order) params.set('order', filters.order);
+  const qs = params.toString();
+  return qs ? `/listings/scored/export.csv?${qs}` : '/listings/scored/export.csv';
 }
 
 // ----------------------------------------------------------------------

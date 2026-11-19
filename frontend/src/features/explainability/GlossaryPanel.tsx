@@ -1,24 +1,41 @@
 /**
- * GlossaryPanel — the F8 "Glossary" card.
+ * GlossaryPanel — the "Glossary" card.
  *
- * Renders every entry in the explainability payload's `feature_labels`
- * map: feature key, human label, unit, and the long-form description.
- * The list is capped with a scroll container (`max-h-96 overflow-y-auto`)
- * so a large feature set doesn't blow out the screen height.
+ * P6b: the glossary lists ONLY the features present in the model — the
+ * feature set is the union of features in `shap_global` (the rows the
+ * bars card charts), passed in as `modelFeatureKeys`.  The full
+ * feature_labels catalogue (which includes Phase-3 features with
+ * in_production_set=false that the production model does not use) is
+ * filtered down, and the caption interpolates the actual count.
+ *
+ * The list is capped with a scroll container (`max-h-96
+ * overflow-y-auto`) — an accepted UI constant (display density, not a
+ * data fact).
  */
-import { ValuationCard } from '@/components/ValuationCard';
-import { EmptyState } from '@/components/EmptyState';
-import { LoadingSkeleton } from '@/components/LoadingSkeleton';
+import { useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
+
+import { EmptyState, LoadingSkeleton, ValuationCard } from '@/components';
 import type { FeatureLabel } from '@/lib/api/types';
 
 interface Props {
   labels: Record<string, FeatureLabel> | undefined;
+  /** Feature keys the model actually uses (from shap_global rows). */
+  modelFeatureKeys: Set<string> | undefined;
   isLoading: boolean;
   isError: boolean;
   onRetry: () => void;
 }
 
-export function GlossaryPanel({ labels, isLoading, isError, onRetry }: Props) {
+export function GlossaryPanel({ labels, modelFeatureKeys, isLoading, isError, onRetry }: Props) {
+  const { t } = useTranslation();
+
+  const entries = useMemo(() => {
+    const all = labels ? Object.entries(labels) : [];
+    if (!modelFeatureKeys) return all;
+    return all.filter(([key]) => modelFeatureKeys.has(key));
+  }, [labels, modelFeatureKeys]);
+
   if (isLoading) {
     return (
       <ValuationCard noPadding>
@@ -32,21 +49,20 @@ export function GlossaryPanel({ labels, isLoading, isError, onRetry }: Props) {
     return (
       <EmptyState
         icon="cloud_off"
-        title="Couldn't load glossary"
-        message="The feature labels feed is unavailable."
-        actionLabel="Retry"
+        title={t('explain.glossaryLoadFailed')}
+        message={t('explain.glossaryUnavailable')}
+        actionLabel={t('common.retry')}
         onAction={onRetry}
       />
     );
   }
 
-  const entries = labels ? Object.entries(labels) : [];
   if (entries.length === 0) {
     return (
       <EmptyState
         icon="menu_book"
-        title="No feature labels"
-        message="The explainability payload did not include a feature_labels map."
+        title={t('explain.glossaryEmpty')}
+        message={t('explain.glossaryEmptyMessage')}
       />
     );
   }
@@ -55,10 +71,10 @@ export function GlossaryPanel({ labels, isLoading, isError, onRetry }: Props) {
     <ValuationCard noPadding>
       <div className="p-space-lg">
         <h2 className="font-headline-section text-headline-section text-on-surface">
-          Glossary
+          {t('explain.glossary')}
         </h2>
         <p className="text-caption-sm text-on-surface-variant mt-1">
-          Every model feature with its label, unit, and description.
+          {t('explain.glossaryCaption', { n: entries.length })}
         </p>
         <ul
           className="mt-space-md flex flex-col gap-3 max-h-96 overflow-y-auto"
@@ -75,9 +91,7 @@ export function GlossaryPanel({ labels, isLoading, isError, onRetry }: Props) {
                     {fl.label}
                   </span>
                   {fl.unit && (
-                    <span className="text-caption-sm text-secondary">
-                      {fl.unit}
-                    </span>
+                    <span className="text-caption-sm text-secondary">{fl.unit}</span>
                   )}
                 </div>
                 <code className="text-caption-sm text-secondary">{key}</code>

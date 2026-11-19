@@ -1,166 +1,207 @@
 /**
  * DealSignalsCard — narrow (4/12) card on the Overview grid.
  *
- * Per 01_overview/code.html, the deal-signals visualization is NOT a
- * Recharts bar chart — it's a single CSS `rounded-full overflow-hidden`
- * horizontal bar with three percentage-width segments, plus a 3-column
- * grid of mini stat cards below showing the count + percentage for each
- * verdict bucket.
- *
- * G1 fix: replaced the previous Recharts stacked BarChart (which
- * approximated the rounded terminal caps with `radius={[6,0,0,6]}`) with
- * the design's actual CSS div approach. This gives perfect pill caps
- * (`rounded-full` = 9999px) matching the design exactly, and is simpler.
- *
- * Colors updated to match the design's semantic tokens:
- *  - Underpriced: `bg-tertiary` (#006d3b) — design uses `bg-tertiary`
- *  - Fair:        `bg-secondary` (#6a5b56) — design uses `bg-secondary`
- *  - Overpriced:  `bg-error` (#ba1a1a) — design uses `bg-error`
- *
- * Counts come from `useListingsScored()` — we tally each listing's
- * `verdict` field via `computeVerdictCounts()` (in overview-helpers).
+ * O2 build round:
+ *  - Counts + shares + stacked bar come from `overview.verdicts` (the
+ *    whole-corpus tally the backend owns, no client-side counting).
+ *  - Anomaly note from `overview.totals.n_flagged`: pluralised correctly,
+ *    hidden when 0, links to Deal Finder with `flagged=true`.
+ *  - Sync button = refetch (spinning state via isFetching).
+ *  - Each verdict tile is a link to Deal Finder filtered by that verdict
+ *    (and the active county / prop_type).
+ *  - Card height fills to match the wide price-distance card so it no
+ *    longer leaves a blank half.
  */
 import { useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 
 import { ValuationCard } from '@/components/ValuationCard';
 import { EmptyState } from '@/components/EmptyState';
 import { LoadingSkeleton } from '@/components/LoadingSkeleton';
-import type { ApiQueryResult } from '@/lib/api/hooks';
-import type { ListingsScoredResponse } from '@/lib/api/types';
-import { computeVerdictCounts } from './overview-helpers';
+import type { OverviewSummaryResponse } from '@/lib/api/types';
+
+import { ALL_VALUE, buildDealFinderUrl } from './overview-helpers';
 
 interface DealSignalsCardProps {
-  query: ApiQueryResult<ListingsScoredResponse>;
-  filterLabel: string;
+  overview: OverviewSummaryResponse | undefined;
+  isLoading: boolean;
+  isError: boolean;
+  onRetry: () => void;
+  county: string;
+  propType: string;
 }
 
-interface Bucket {
-  key: 'underpriced' | 'fair' | 'overpriced';
-  label: string;
-  count: number;
-  pct: number;
-  /** Tailwind bg class for the bar segment + legend dot */
-  barClass: string;
-  dotClass: string;
-  /** Text color class for the mini-card count */
-  textClass: string;
-}
+const UNDER_COLOR = 'bg-tertiary';
+const FAIR_COLOR = 'bg-secondary';
+const OVER_COLOR = 'bg-error';
 
-export function DealSignalsCard({ query, filterLabel }: DealSignalsCardProps) {
-  const { data, isLoading, isError, refetch } = query;
+export function DealSignalsCard({
+  overview,
+  isLoading,
+  isError,
+  onRetry,
+  county,
+  propType,
+}: DealSignalsCardProps) {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
 
-  const tally = useMemo(
-    () => computeVerdictCounts(data?.listings ?? []),
-    [data],
-  );
+  const verdicts = overview?.verdicts;
+  const nFlagged = overview?.totals.n_flagged ?? 0;
 
-  const totalRendered = tally.underpriced + tally.fair + tally.overpriced;
-  const pct = (n: number) =>
-    totalRendered > 0 ? (n / totalRendered) * 100 : 0;
-
-  const buckets: Bucket[] = [
-    {
-      key: 'underpriced',
-      label: 'Under',
-      count: tally.underpriced,
-      pct: pct(tally.underpriced),
-      barClass: 'bg-tertiary',
-      dotClass: 'bg-tertiary',
-      textClass: 'text-tertiary',
-    },
-    {
-      key: 'fair',
-      label: 'Fair',
-      count: tally.fair,
-      pct: pct(tally.fair),
-      barClass: 'bg-secondary',
-      dotClass: 'bg-secondary',
-      textClass: 'text-on-surface',
-    },
-    {
-      key: 'overpriced',
-      label: 'Over',
-      count: tally.overpriced,
-      pct: pct(tally.overpriced),
-      barClass: 'bg-error',
-      dotClass: 'bg-error',
-      textClass: 'text-error',
-    },
-  ];
+  const segments = useMemo(() => {
+    if (!verdicts || verdicts.n_listings === 0) return [];
+    const total = verdicts.n_listings;
+    return [
+      {
+        key: 'underpriced' as const,
+        label: t('overview.under'),
+        count: verdicts.underpriced,
+        sharePct: Math.round((verdicts.underpriced / total) * 1000) / 10,
+        color: UNDER_COLOR,
+      },
+      {
+        key: 'fair' as const,
+        label: t('overview.fairMarket'),
+        count: verdicts.fair,
+        sharePct: Math.round((verdicts.fair / total) * 1000) / 10,
+        color: FAIR_COLOR,
+      },
+      {
+        key: 'overpriced' as const,
+        label: t('overview.over'),
+        count: verdicts.overpriced,
+        sharePct: Math.round((verdicts.overpriced / total) * 1000) / 10,
+        color: OVER_COLOR,
+      },
+    ];
+  }, [verdicts, t]);
 
   return (
     <ValuationCard className="lg:col-span-4" noPadding>
-      <div className="p-space-lg flex flex-col gap-4">
-        <div className="flex items-start justify-between gap-4">
+      <div className="p-space-lg h-full flex flex-col">
+        <div className="flex items-start justify-between gap-4 mb-4">
           <div>
             <h2 className="font-headline-section text-headline-section text-on-surface">
-              Deal signals
+              {t('overview.dealSignals')}
             </h2>
-            <p className="font-body-regular font-body-regular text-secondary mt-0.5">
-              Model estimate vs asking price distribution
+            <p className="text-body-regular font-body-regular text-secondary mt-0.5">
+              {t('overview.askingVsEstimate')}
             </p>
           </div>
+          <button
+            type="button"
+            onClick={() => onRetry()}
+            title={t('overview.refreshSignals')}
+            aria-label={t('overview.refreshSignals')}
+            className="w-9 h-9 rounded-full bg-surface-container-low text-on-surface-variant hover:text-primary flex items-center justify-center shrink-0 transition-colors"
+          >
+            <span
+              className={`material-symbols-outlined text-[18px] ${isLoading ? 'animate-spin' : ''}`}
+              aria-hidden="true"
+            >
+              sync
+            </span>
+          </button>
         </div>
 
         {isLoading ? (
-          <LoadingSkeleton className="h-24 w-full rounded-md" />
+          <LoadingSkeleton className="h-32 w-full rounded-md flex-1" />
         ) : isError ? (
           <EmptyState
             icon="cloud_off"
-            title="Couldn't load signals"
-            message="The scored listings feed is unavailable right now."
-            actionLabel="Retry"
-            onAction={() => refetch()}
+            title={t('common.error')}
+            message={t('common.dataUnavailable')}
+            actionLabel={t('common.retry')}
+            onAction={onRetry}
           />
-        ) : totalRendered === 0 ? (
-          <EmptyState
-            icon="sentiment_neutral"
-            title="No deals to score"
-            message="No scored listings match the current filter — try widening it."
-          />
+        ) : !verdicts || verdicts.n_listings === 0 ? (
+          <EmptyState icon="insights" title={t('overview.emptySelection')} message="" />
         ) : (
           <>
-            {/* Single rounded-full bar with percentage-width segments.
-                This is the design's actual approach — NOT a Recharts bar.
-                `rounded-full overflow-hidden` gives perfect pill terminal
-                caps (9999px radius) on both ends automatically. */}
-            <div className="w-full h-6 rounded-full overflow-hidden flex bg-surface-container-high shadow-inner">
-              {buckets.map((b) => (
+            {/* Stacked bar */}
+            <div
+              className="w-full h-6 rounded-full overflow-hidden flex bg-surface-container-high shadow-inner"
+              role="img"
+              aria-label={t('overview.askingVsEstimate')}
+            >
+              {segments.map((s) => (
                 <div
-                  key={b.key}
-                  className={`h-full ${b.barClass} transition-all duration-500 hover:opacity-90`}
-                  style={{ width: `${b.pct}%` }}
-                  title={`${b.label}priced: ${b.pct.toFixed(1)}%`}
+                  key={s.key}
+                  className={`h-full ${s.color} transition-all duration-500 hover:opacity-90`}
+                  style={{ width: `${s.sharePct}%` }}
+                  title={`${s.label}: ${s.sharePct}%`}
                 />
               ))}
             </div>
 
-            {/* 3-column mini stat cards — one per verdict bucket.
-                Each shows the dot + label, the count (in headline-section
-                size), and the percentage of sample. */}
-            <div className="grid grid-cols-3 gap-2">
-              {buckets.map((b) => (
-                <div
-                  key={b.key}
-                  className="flex flex-col gap-1 p-2 rounded-DEFAULT bg-surface-container-low"
+            {/* Three count tiles */}
+            <div className="grid grid-cols-3 gap-2 mt-4">
+              {segments.map((s) => (
+                <button
+                  key={s.key}
+                  type="button"
+                  onClick={() =>
+                    navigate(
+                      buildDealFinderUrl({
+                        county: county !== ALL_VALUE ? county : null,
+                        propType: propType !== ALL_VALUE ? propType : null,
+                        verdict: s.key,
+                      }),
+                    )
+                  }
+                  className="flex flex-col gap-1 p-2 rounded-DEFAULT bg-surface-container-low text-left hover:bg-surface-container transition-colors focus:outline-none focus:ring-2 focus:ring-primary-container"
+                  aria-label={`${s.label}: ${s.count} listings — view in Deal Finder`}
                 >
                   <div className="flex items-center gap-1.5">
-                    <span className={`w-2 h-2 rounded-full ${b.dotClass}`} />
-                    <span className="text-xs text-secondary font-medium">{b.label}</span>
+                    <span className={`w-2 h-2 rounded-full ${s.color}`} aria-hidden="true" />
+                    <span className="text-xs text-secondary font-medium">{s.label}</span>
                   </div>
-                  <span className={`font-headline-section text-headline-section ${b.textClass}`}>
-                    {b.count.toLocaleString('en-KE')}
+                  <span className="font-headline-section text-headline-section text-on-surface">
+                    {s.count}
                   </span>
                   <span className="text-xs text-secondary">
-                    {b.pct.toFixed(1)}% sample
+                    {t('overview.sampleShare', { pct: s.sharePct.toFixed(1) })}
                   </span>
-                </div>
+                </button>
               ))}
             </div>
 
-            <p className="text-xs text-secondary font-body-regular pt-1">
-              Asking price compared with the model estimate range · {filterLabel}
+            <p className="text-xs text-secondary font-body-regular pt-3">
+              {t('overview.askingVsEstimate')}
             </p>
+
+            {/* Anomaly note — hidden when 0 */}
+            {nFlagged > 0 && (
+              <button
+                type="button"
+                onClick={() =>
+                  navigate(
+                    buildDealFinderUrl({
+                      county: county !== ALL_VALUE ? county : null,
+                      propType: propType !== ALL_VALUE ? propType : null,
+                      flagged: true,
+                    }),
+                  )
+                }
+                className="mt-auto flex items-center gap-2.5 p-3 rounded-DEFAULT bg-surface-container-low text-secondary text-xs font-body-medium hover:bg-surface-container transition-colors focus:outline-none focus:ring-2 focus:ring-primary-container"
+                aria-label={t('overview.anomaliesViewInDealFinder')}
+              >
+                <span
+                  className="material-symbols-outlined text-[18px] text-primary-container shrink-0"
+                  aria-hidden="true"
+                >
+                  error_outline
+                </span>
+                <span className="truncate">
+                  {t('overview.anomaliesFlagged', {
+                    count: nFlagged,
+                    n: nFlagged,
+                  })}
+                </span>
+              </button>
+            )}
           </>
         )}
       </div>

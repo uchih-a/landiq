@@ -13,9 +13,14 @@ Public surface:
     DriverContribution       — one feature's contribution to the prediction
     ComparablesService       — nearby-listing comparables from listings_scored.parquet
     ComparableListing        — one comparable listing row
+    shap_coverage_from_weights — the ONE SHAP-coverage computation, shared
+                              by the registry, the live /predict block and
+                              /model/explainability (P6b)
+    TREE_MEMBERS             — the tree members shap.TreeExplainer covers
 """
 
 from landval.modelling.comparables import ComparableListing, ComparablesService
+from landval.modelling.coverage import TREE_MEMBERS, shap_coverage_from_weights
 from landval.modelling.explain import (
     DriverContribution,
     LiveExplanationResult,
@@ -37,4 +42,6 @@ __all__ = [
     "DriverContribution",
     "ComparablesService",
     "ComparableListing",
+    "TREE_MEMBERS",
+    "shap_coverage_from_weights",
 ]

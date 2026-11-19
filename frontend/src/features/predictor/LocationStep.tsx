@@ -80,8 +80,8 @@ export function LocationStep({
       {place ? (
         <div className="flex flex-col gap-2">
           <div className="flex items-center gap-1.5 text-caption-sm text-secondary">
-            <span className="material-symbols-outlined text-[14px]">drag_indicator</span>
-            Drag the pin to fine-tune the exact parcel location.
+            <span className="material-symbols-outlined text-[14px]" aria-hidden="true">drag_indicator</span>
+            {t('predictor.dragHint')}
           </div>
           <MapLibreMap
             initialLongitude={place.longitude}

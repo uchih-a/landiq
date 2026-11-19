@@ -10,69 +10,40 @@ the data files present at schema-build time.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+
+# P3b: the canonical CountySummaryRow / CountySummaryResponse live in
+# ``app.schemas.counties``; re-exported here so existing imports keep
+# working (the ``as`` aliases mark deliberate re-exports).
+from app.schemas.counties import (
+    CountySummaryResponse as CountySummaryResponse,
+)
+from app.schemas.counties import (
+    CountySummaryRow as CountySummaryRow,
+)
+from app.schemas.counties import (
+    PriceBandEdge as PriceBandEdge,
+)
+from app.schemas.counties import (
+    PropertyTypeCount as PropertyTypeCount,
+)
+from app.schemas.pagination import PaginationMeta as PaginationMeta
 
 # ----------------------------------------------------------------------
 # Shared envelope for paginated responses
 # ----------------------------------------------------------------------
 
 
-class PaginationMeta(BaseModel):
-    """Standard pagination block returned by every list endpoint."""
-
-    page: int = Field(..., ge=1, description="Current page (1-indexed)")
-    page_size: int = Field(..., ge=1, description="Rows returned per page")
-    total_rows: int = Field(..., ge=0, description="Total rows matching the filter")
-    total_pages: int = Field(..., ge=0, description="Total pages at this page_size")
-    filters: dict[str, Any] = Field(
-        default_factory=dict,
-        description="The filters actually applied (echoed for the client).",
-    )
-
-
 # ----------------------------------------------------------------------
 # Market Insights — GET /api/v1/counties/summary
 # Source: app_exports/county_summary.csv (Cell 9.5)
 # ----------------------------------------------------------------------
-
-
-class CountySummaryRow(BaseModel):
-    """One row of ``county_summary.csv`` — Cell 9.5 builds it as a
-    per-county groupby over ``df_model``.
-    """
-
-    county: str = Field(..., description="Kenya county name")
-    n_listings: int = Field(..., description="Listings in the modelling frame")
-    median_price_per_acre_ksh: float = Field(..., description="Median KSh per acre for the county")
-    q1_price_per_acre_ksh: float = Field(..., description="25th percentile KSh per acre")
-    q3_price_per_acre_ksh: float = Field(..., description="75th percentile KSh per acre")
-    mean_log_price_per_acre: float = Field(
-        ..., description="Mean of the log target (log KSh per acre)"
-    )
-    water_body_distance_share: float = Field(
-        ..., description="Share of listings with a measured water-body distance"
-    )
-    n_below_min_county_n: bool = Field(
-        ...,
-        description=(
-            "True when n_listings < CONFIG.MIN_COUNTY_N (Cell 9.5). The "
-            "county's summary statistics rest on too few listings to trust."
-        ),
-    )
-
-
-class CountySummaryResponse(BaseModel):
-    """Response for GET /api/v1/counties/summary."""
-
-    counties: list[CountySummaryRow]
-    n_counties: int
-    min_county_n: int = Field(
-        ..., description="CONFIG.MIN_COUNTY_N from the manifest (small-n threshold)"
-    )
-
-
+# P3b: the canonical CountySummaryRow / CountySummaryResponse live in
+# ``app.schemas.counties`` (where the P3b additive fields were added);
+# they are re-exported here so existing imports keep working.  The
+# ``as`` aliases mark them as deliberate re-exports (ruff F401 exempt).
 # ----------------------------------------------------------------------
 # Model Performance — GET /api/v1/model/metrics
 # Sources: app_exports/metrics_table.csv + metrics.json (Cell 9.3)
@@ -142,10 +113,46 @@ class MetricsJsonResponse(BaseModel):
 
 
 class MetricsResponse(BaseModel):
-    """Full GET /api/v1/model/metrics response — table + JSON together."""
+    """Full GET /api/v1/model/metrics response — table + JSON together.
+
+    P5b additions (all nullable, additive):
+    - ``ensemble_model`` — the production run's ensemble row's model
+      name (identified by the backend), null when no such row exists.
+      The frontend resolves the ensemble row by THIS value only (no
+      substring/heuristic fallbacks).
+    - ``production_run_label`` — the production run's name + created
+      date from the response, for the card subtitle.
+    - ``interval_levels`` — the nominal interval coverage levels present
+      in the data: derived from
+      ``metrics_json.interval_coverage_weighted_ensemble[*].level`` when
+      the artifact carries them; else from the ensemble row's populated
+      ``interval_coverage_*`` columns; else null.
+    - ``interval_method`` — documented backend constant describing the
+      interval implementation (the modeling code implements the
+      multiplicative split-conformal interval — see
+      ``src/landval/modelling/predict.py``); null when unknown.
+    - ``n_test`` / ``n_dev`` — row counts of the loaded prediction
+      parquets (test_predictions / oof_predictions); null when the file
+      is not loaded.
+    - ``model_info`` — per-model ``display_name`` + ``family`` from the
+      backend's documented model registry mapping (facts about the
+      model implementations, not UI copy).
+    - ``default_interval_level`` — the app's standard level (the same
+      canonical constant the predict options endpoint serves).
+    """
+
+    model_config = ConfigDict(protected_namespaces=())
 
     table: MetricsTableResponse
     metrics_json: MetricsJsonResponse
+    ensemble_model: str | None = None
+    production_run_label: str | None = None
+    interval_levels: list[float] | None = None
+    default_interval_level: float | None = None
+    interval_method: str | None = None
+    n_test: int | None = None
+    n_dev: int | None = None
+    model_info: dict[str, dict[str, str]] = {}
 
 
 # ----------------------------------------------------------------------
@@ -236,25 +243,109 @@ class FeatureLabel(BaseModel):
     available_at_prediction_time: str | bool | None
 
 
+class ExplainabilityCoverage(BaseModel):
+    """The ``ensemble_shap_coverage`` block on the explainability payload
+    (P6b) — normalised to FRACTIONS in [0, 1] with documented keys, plus the
+    ``source`` flag so the UI can say where the numbers come from.
+
+    - ``source="recomputed"`` — computed by the backend from the weights of
+      the actually-loaded (post-pruning, renormalised) ensemble via the ONE
+      shared function (``landval.modelling.coverage``).  ``explained_members``
+      / ``unexplained_members`` list the real kept members in this case.
+    - ``source="manifest"`` — the notebook-time values from
+      ``manifest.json:ensemble_shap_coverage`` (pre-pruning), normalised to
+      fractions (values above 1 are treated as percentages).  Members are
+      ``None`` in this case: the manifest does not record them, and the
+      backend never invents member names.
+    - ``source=None`` — neither path produced shares (e.g. the manifest block
+      is absent and the model registry is not loaded).
+    """
+
+    model_config = ConfigDict(protected_namespaces=())
+
+    tree_share_explained_by_shap: float | None = Field(
+        None, description="Fraction in [0,1] of the ensemble blend the SHAP values explain."
+    )
+    tabnet_share_not_covered: float | None = Field(
+        None,
+        description="Fraction in [0,1] of the blend SHAP does NOT explain (kept for name compatibility — the share of every non-tree member, 0 when none are kept).",
+    )
+    explained_members: list[str] | None = Field(
+        None, description="Kept members the SHAP values cover (source='recomputed' only)."
+    )
+    unexplained_members: list[str] | None = Field(
+        None, description="Kept members SHAP does not cover (source='recomputed' only)."
+    )
+    source: Literal["recomputed", "manifest"] | None = Field(
+        None, description="'recomputed' (loaded ensemble) or 'manifest' (training-time report)."
+    )
+    note: str | None = Field(
+        None, description="The notebook's explanatory note, passed through when present."
+    )
+
+
+class ExplainabilityModel(BaseModel):
+    """One ensemble member on the explainability payload (P6b).
+
+    ``ensemble_weight`` is the member's weight in the loaded (renormalised)
+    ensemble — ``None`` when the model registry is not loaded.  ``has_shap``
+    is True when the member has rows in ``shap_global.csv`` (i.e. the bars
+    card can chart it).  ``display_name`` / ``family`` come from the
+    backend's documented model registry mapping (``app.schemas.canonical.
+    MODEL_INFO``) so the frontend never re-types them.
+    """
+
+    model_config = ConfigDict(protected_namespaces=())
+    key: str = Field(
+        ..., description="Member key exactly as the data uses it ('xgb', 'catboost', 'tabnet')"
+    )
+    display_name: str = Field(
+        ..., description="Human-readable name from the backend model registry mapping"
+    )
+    family: str | None = Field(
+        None,
+        description="'tree' / 'neural' / 'ensemble' / 'baseline' from the backend mapping; null for unknown keys",
+    )
+    ensemble_weight: float | None = Field(
+        None, description="Weight in the loaded ensemble; null when the registry is not loaded"
+    )
+    has_shap: bool = Field(..., description="True when the member has rows in shap_global.csv")
+
+
 class ExplainabilityResponse(BaseModel):
     """GET /api/v1/model/explainability — combines shap_global,
     feature_importance and feature_labels in one payload so the tab can
     render the global-importance chart and the plain-English feature
-    labels in a single round-trip."""
+    labels in a single round-trip.
 
+    P6b additions (all nullable / defaulting, additive — older payloads
+    without them still validate):
+    - ``models`` — the ensemble member list (key, display_name, family,
+      ensemble_weight, has_shap), ordered by ensemble weight descending.
+      Built from the loaded registry when available, else from the
+      distinct models in shap_global.csv (weights null).
+    - ``default_model`` — the SHAP-covered member with the highest
+      ensemble weight (the bars card's default selection); the first
+      SHAP-covered member in file order when no weights are available;
+      null when no member has SHAP rows.
+    - ``ensemble_shap_coverage`` — see ``ExplainabilityCoverage``.
+    - ``typical_price_per_acre_ksh`` / ``combined_base_value`` — the
+      load-time baseline price (exp of the weighted sum of tree-member
+      base values — the SAME baseline every /predict response reports).
+      Null when the model registry / explanation service is unavailable
+      (never invented).
+    """
+
+    model_config = ConfigDict(protected_namespaces=())
     production_run: str
     shap_global: list[ShapGlobalRow]
     feature_importance: list[FeatureImportanceRow]
     feature_labels: dict[str, FeatureLabel]
-    ensemble_shap_coverage: dict[str, Any] = Field(
-        ...,
-        description=(
-            "From the manifest — the weighted sum of member SHAP values "
-            "explains the tree share; the TabNet share is NOT covered. "
-            "Reports ``tree_share_explained_by_shap`` and "
-            "``tabnet_share_not_covered`` plus the notebook's note."
-        ),
-    )
+    ensemble_shap_coverage: ExplainabilityCoverage
+    models: list[ExplainabilityModel] = Field(default_factory=list)
+    default_model: str | None = None
+    typical_price_per_acre_ksh: float | None = None
+    combined_base_value: float | None = None
 
 
 # ----------------------------------------------------------------------

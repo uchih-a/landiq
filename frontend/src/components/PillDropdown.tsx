@@ -50,12 +50,12 @@ export function PillDropdown({
         className="inline-flex items-center gap-2 px-4 py-2.5 rounded-full bg-surface-container-lowest text-on-surface shadow-sm hover:bg-surface-container-low transition-colors duration-150 text-body-medium font-body-medium cursor-pointer"
       >
         {leadingIcon && (
-          <span className="material-symbols-outlined text-[18px] text-secondary">
+          <span className="material-symbols-outlined text-[18px] text-secondary" aria-hidden="true">
             {leadingIcon}
           </span>
         )}
         <span>{selectedLabel}</span>
-        <span className="material-symbols-outlined text-[18px] text-secondary">
+        <span className="material-symbols-outlined text-[18px] text-secondary" aria-hidden="true">
           keyboard_arrow_down
         </span>
       </button>

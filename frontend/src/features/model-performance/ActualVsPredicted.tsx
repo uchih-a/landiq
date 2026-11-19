@@ -34,14 +34,17 @@ import {
 import { EmptyState, LoadingSkeleton, ValuationCard } from '@/components';
 import type { ApiQueryResult } from '@/lib/api/hooks';
 import type { ModelPredictionsResponse, PredictionRow } from '@/lib/api/types';
+import {
+  CHART_COLOR_ON_SURFACE as PARITY_INK,
+  CHART_COLOR_ON_SURFACE_VARIANT as AXIS_INK,
+  CHART_COLOR_OUTLINE as HATCH_STROKE,
+  CHART_COLOR_PRIMARY_CONTAINER as PRIMARY_CONTAINER,
+  CHART_COLOR_TERTIARY as TERTIARY,
+} from '@/lib/ui/chart-tokens';
 
 interface Props {
   query: ApiQueryResult<ModelPredictionsResponse>;
 }
-
-const PRIMARY_CONTAINER = '#e8742a';
-const TERTIARY = '#006d3b';
-const HATCH_STROKE = '#dec1b3';
 
 interface ChartPoint {
   actual: number; // KSh per acre (exp'd from log)
@@ -172,10 +175,10 @@ export function ActualVsPredicted({ query }: Props) {
                   name="Actual price"
                   scale="log"
                   domain={[100_000, 20_000_000]}
-                  stroke="#574238"
-                  tick={{ fill: '#574238', fontSize: 11 }}
+                  stroke={AXIS_INK}
+                  tick={{ fill: AXIS_INK, fontSize: 11 }}
                   tickFormatter={(v: number) => `${(v / 1_000_000).toFixed(0)}M`}
-                  label={{ value: 'Actual KSh / acre (log)', position: 'insideBottom', offset: -16, fill: '#574238', fontSize: 12 }}
+                  label={{ value: 'Actual KSh / acre (log)', position: 'insideBottom', offset: -16, fill: AXIS_INK, fontSize: 12 }}
                 />
                 <YAxis
                   type="number"
@@ -183,10 +186,10 @@ export function ActualVsPredicted({ query }: Props) {
                   name="Predicted price"
                   scale="log"
                   domain={[100_000, 20_000_000]}
-                  stroke="#574238"
-                  tick={{ fill: '#574238', fontSize: 11 }}
+                  stroke={AXIS_INK}
+                  tick={{ fill: AXIS_INK, fontSize: 11 }}
                   tickFormatter={(v: number) => `${(v / 1_000_000).toFixed(0)}M`}
-                  label={{ value: 'Predicted KSh / acre (log)', angle: -90, position: 'insideLeft', fill: '#574238', fontSize: 12 }}
+                  label={{ value: 'Predicted KSh / acre (log)', angle: -90, position: 'insideLeft', fill: AXIS_INK, fontSize: 12 }}
                 />
                 <Tooltip content={<ChartTooltip />} />
 
@@ -208,7 +211,7 @@ export function ActualVsPredicted({ query }: Props) {
                     type="monotone"
                     dataKey="predicted"
                     data={parityLine}
-                    stroke="#1f1b16"
+                    stroke={PARITY_INK}
                     strokeWidth={1.5}
                     strokeDasharray="5 4"
                     dot={false}

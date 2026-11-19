@@ -25,8 +25,10 @@ from app.api.v1.routers import listings as listings_router
 from app.api.v1.routers import meta as meta_router
 from app.api.v1.routers import metrics as metrics_router
 from app.api.v1.routers import model as model_router
+from app.api.v1.routers import overview as overview_router
 from app.api.v1.routers import places as places_router
 from app.api.v1.routers import predict as predict_router
+from app.api.v1.routers import predict_options as predict_options_router
 from app.core.config import get_settings
 from app.core.exceptions import register_exception_handlers
 from app.core.logging import configure_logging, get_logger
@@ -329,6 +331,8 @@ def create_app() -> FastAPI:
     app.include_router(places_router.router, prefix=api_v1_prefix)
     app.include_router(listings_router.router, prefix=api_v1_prefix)
     app.include_router(data_explorer_router.router, prefix=api_v1_prefix)
+    app.include_router(overview_router.router, prefix=api_v1_prefix)
+    app.include_router(predict_options_router.router, prefix=api_v1_prefix)
     # /metrics is NOT under /api/v1 — standard Prometheus scrape path
     app.include_router(metrics_router.router)
 

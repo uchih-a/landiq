@@ -8,6 +8,14 @@ Internally B1 works with 0/1/None, so the API layer converts booleans to
 0/1 and ``"not_sure"`` to None before handing the dict to the feature
 pipeline.  The ten items match ``scoring_params.json:infra_items`` and
 B1's ``InfrastructureCalculator`` (see ``test_features.py``).
+
+prop_type validation (P2b): the request validates ``prop_type`` against
+the canonical list ``["Land", "Farm", "Commercial"]`` (case-insensitive,
+normalised to canonical casing).  Unknown values return 422 with the
+``allowed`` list in details.  The model's preprocessor groups unseen
+categorical values into "Other" at transform time, so this validation
+does NOT change inference for the canonical three — it only stops the
+client from sending values the model treats as "Other" anyway.
 """
 
 from __future__ import annotations
@@ -16,26 +24,35 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.schemas.canonical import PARCEL_CHECKLIST_FIELDS, PROPERTY_TYPES
+
+# Re-export so existing imports from this module keep working.
+__all__ = ["PARCEL_CHECKLIST_FIELDS", "PredictRequest", "PredictResponse"]
+
 # The ten infrastructure checklist items — same names as
 # ``scoring_params.json:infra_items`` and B1's InfrastructureCalculator.
-PARCEL_CHECKLIST_FIELDS = (
-    "borehole",
-    "piped_water",
-    "river_water",
-    "water_tank",
-    "grid_electric",
-    "solar_electric",
-    "full_fence",
-    "partial_fence",
-    "structures",
-    "internal_road",
-)
+# Imported from app.schemas.canonical (single source of truth).
 
 # A single checklist value: True / False / "not_sure" (or null, treated as
 # "not_sure").  Pydantic v2 accepts bool before str when the union is written
 # this way, so ``true``/``false`` parse as booleans and ``"not_sure"`` as the
 # string literal.
 ChecklistValue = bool | Literal["not_sure"] | None
+
+
+def _canonical_prop_type(v: str | None) -> str | None:
+    """Normalise a prop_type value to the canonical casing.
+
+    Returns the canonical-cased value when the input matches one of
+    ``PROPERTY_TYPES`` case-insensitively, else returns the input
+    unchanged (the field_validator below then raises 422).
+    """
+    if v is None:
+        return v
+    for canonical in PROPERTY_TYPES:
+        if v.lower() == canonical.lower():
+            return canonical
+    return v
 
 
 class PredictRequest(BaseModel):
@@ -68,7 +85,7 @@ class PredictRequest(BaseModel):
     lat: float = Field(..., ge=-90, le=90, description="Latitude (WGS84)")
     lon: float = Field(..., ge=-180, le=180, description="Longitude (WGS84)")
     size_acres: float = Field(..., gt=0, description="Parcel size in acres")
-    prop_type: str = Field("Land", description="Property type (e.g. 'Land')")
+    prop_type: str = Field("Land", description="Property type (Land / Farm / Commercial)")
     parcel_features: dict[str, ChecklistValue] = Field(
         default_factory=dict,
         description=(
@@ -88,6 +105,23 @@ class PredictRequest(BaseModel):
             "accepted (q recomputed from OOF residuals)."
         ),
     )
+
+    @field_validator("prop_type")
+    @classmethod
+    def _check_prop_type(cls, v: str) -> str:
+        """Validate prop_type against the canonical list (case-insensitive).
+
+        Returns the canonical-cased value (so downstream code can compare
+        against the canonical list without re-normalising).  Raises
+        ValueError → 422 with the allowed list when the value is not one
+        of the canonical three.
+        """
+        canonical = _canonical_prop_type(v)
+        if canonical is None or canonical not in PROPERTY_TYPES:
+            raise ValueError(
+                f"prop_type must be one of {PROPERTY_TYPES} (case-insensitive), got {v!r}."
+            )
+        return canonical
 
     @field_validator("parcel_features")
     @classmethod

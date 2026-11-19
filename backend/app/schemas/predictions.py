@@ -93,7 +93,18 @@ class ModelPredictionsResponse(BaseModel):
 
 
 class ErrorBySupportRow(BaseModel):
-    """One row from error_by_support.csv."""
+    """One row from error_by_support.csv.
+
+    ``band_order`` (P5b, additive): the ascending ordinal of the band
+    within its ``support_measure`` group (0 = lowest support band), so
+    the UI sorts by it instead of parsing band strings like
+    ``"<10 (below COVERAGE_MIN_COUNTY_N)"`` or ``"50+"``.  Derived by
+    parsing the leading number in the band label; ties keep CSV order.
+
+    The band label itself is served VERBATIM from the notebook's export
+    (Cell 9.9) — the frontend displays it as-is and never re-derives
+    any embedded threshold.
+    """
 
     support_measure: str = Field(..., description="'county_listings' or 'nearby_within_50km'")
     band: str = Field(
@@ -103,6 +114,18 @@ class ErrorBySupportRow(BaseModel):
     n_listings: int = Field(..., description="Count of listings in that band")
     oof_rmse: float = Field(..., description="OOF RMSE for that band (log scale)")
     oof_mae: float = Field(..., description="OOF MAE for that band (log scale)")
+    band_order: int = Field(
+        ...,
+        ge=0,
+        description="Ascending ordinal within the support_measure group (0 = lowest band)",
+    )
+
+
+class SupportMeasureOption(BaseModel):
+    """One support measure group (P5b, additive)."""
+
+    value: str
+    label_key: str
 
 
 class ErrorBySupportResponse(BaseModel):
@@ -110,3 +133,10 @@ class ErrorBySupportResponse(BaseModel):
 
     rows: list[ErrorBySupportRow]
     n_rows: int
+    support_measures: list[SupportMeasureOption] = Field(
+        default_factory=list,
+        description=(
+            "The distinct support_measure groups present, in first-appearance "
+            "order, with i18n label keys (P5b)."
+        ),
+    )

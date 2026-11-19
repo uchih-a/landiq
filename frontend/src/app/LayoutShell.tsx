@@ -1,9 +1,43 @@
+import { useEffect, useState } from 'react';
 import { Link, Outlet, useLocation } from 'react-router-dom';
+import { useMeta } from '@/lib/api/hooks';
+import { setFxFromMeta } from '@/lib/currency/format';
 import { MOBILE_DOCK_ITEMS, NAV_ITEMS, RAIL_ITEMS_BOTTOM, RAIL_ITEMS_TOP } from './nav-config';
+import { formatLiveDateTime } from '@/features/overview/overview-helpers';
 
 function isActive(pathname: string, path: string): boolean {
   if (path === '/') return pathname === '/';
   return pathname === path || pathname.startsWith(`${path}/`);
+}
+
+/**
+ * Live clock — updates every minute so the header date/time stays current.
+ * Returns the formatted two-line object from `formatLiveDateTime`.
+ * Kept here (rather than inlined) so both the desktop + mobile headers
+ * can share it.
+ */
+function useLiveClock() {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 60_000);
+    return () => clearInterval(id);
+  }, []);
+  return formatLiveDateTime(now);
+}
+
+/**
+ * P8b: push the FX rate from /meta into the shared currency store as
+ * soon as /meta loads.  The store (subscribe/getSnapshot + useCurrency)
+ * re-renders every consumer when the rate ARRIVES — and /meta serves
+ * fx=null until the operator configures FX_KSH_PER_USD, in which case
+ * the USD toggle is disabled and USD amounts render as KSh (honest
+ * "not available", never a typed fallback rate).
+ */
+function useFxFromMeta() {
+  const metaQ = useMeta();
+  useEffect(() => {
+    setFxFromMeta(metaQ.data?.fx ?? null);
+  }, [metaQ.data?.fx]);
 }
 
 /**
@@ -52,6 +86,12 @@ function BrandMark({ size = 32 }: { size?: number }) {
  * 9 screens.
  */
 function DesktopHeader({ pathname }: { pathname: string }) {
+  // O2: real model_version from /meta (hidden when null) + live date/time
+  // from the browser clock (timezone abbreviation comes from Intl, not a
+  // hard-coded "EAT").
+  const metaQ = useMeta();
+  const clock = useLiveClock();
+  const modelVersion = metaQ.data?.model_version;
   return (
     <header className="hidden md:flex fixed top-0 left-0 right-0 z-50 h-20 px-margin items-center justify-between gap-space-md bg-surface/85 backdrop-blur-md shadow-[0_1px_8px_rgba(0,0,0,0.03)]">
       {/* Left — logo + title */}
@@ -102,14 +142,19 @@ function DesktopHeader({ pathname }: { pathname: string }) {
         })}
       </nav>
 
-      {/* Right — date/time block (xl+) + profile */}
+      {/* Right — live date/time (xl+) + profile.
+        O2: replaced the hard-coded "Terra Kenya AI · v2.4" text with the
+        real model_version from /meta (hidden when null) and the live
+        date/time from the browser clock.  No hard-coded "EAT" — the
+        timezone abbreviation comes from Intl.DateTimeFormat. */}
       <div className="flex items-center gap-space-md flex-shrink-0">
         <div className="hidden xl:flex flex-col text-right leading-tight">
           <span className="font-label-metric text-label-metric text-on-surface">
-            Ensemble model v1
+            {clock.dateLine}
           </span>
           <span className="font-caption-sm text-caption-sm text-secondary">
-            Terra Kenya AI · v2.4
+            {clock.timeLine}
+            {modelVersion ? ` · ${modelVersion}` : ''}
           </span>
         </div>
         <div className="h-10 w-10 rounded-full p-0.5 bg-surface-container-highest flex items-center justify-center">
@@ -163,13 +208,16 @@ function MobileHeader() {
           </div>
         </div>
         <div className="flex items-center gap-space-sm">
+          {/* O2: removed the permanent orange notification dot — no fake
+              notification badges.  The bell icon stays as an affordance
+              for future real-state wiring; the dot is gone until there
+              is something real to surface. */}
           <button
             aria-label="Notifications"
             type="button"
             className="relative w-11 h-11 rounded-full bg-surface-container-lowest flex items-center justify-center text-on-surface-variant shadow-[0_2px_8px_rgba(27,21,18,0.06)]"
           >
             <span className="material-symbols-outlined text-[20px]">notifications</span>
-            <span className="absolute top-2.5 right-2.5 w-2 h-2 rounded-full bg-primary-container ring-2 ring-surface-container-lowest" />
           </button>
           <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center shadow-[0_2px_6px_rgba(157,68,0,0.2)]">
             <span className="material-symbols-outlined text-on-primary text-[18px]">person</span>
@@ -198,7 +246,8 @@ function MobileHeader() {
  *   bg and text. Matches design's hover:text-primary.
  * - Button transition: transition-all (matches design) instead of
  *   transition-colors.
- * - Notifications button: has a red dot indicator (bg-primary-container ring).
+ * - Notifications button: plain bell (no dot — P8b-M removed the
+ *   permanent notification-dot decoration that implied a state).
  */
 function LeftRail() {
   const railButtonClass =
@@ -216,9 +265,6 @@ function LeftRail() {
             className={railButtonClass}
           >
             <span className="material-symbols-outlined text-[20px]">{item.icon}</span>
-            {item.hasDot && (
-              <span className="absolute top-2.5 right-2.5 w-2 h-2 rounded-full bg-primary-container ring-2 ring-surface-container-lowest" />
-            )}
           </button>
         ))}
       </div>
@@ -295,6 +341,9 @@ function MobileDock({ pathname }: { pathname: string }) {
 
 export default function LayoutShell() {
   const { pathname } = useLocation();
+  // P8b: push the configured FX rate into the shared currency store as
+  // soon as /meta loads (null until the backend serves one).
+  useFxFromMeta();
 
   return (
     <div className="min-h-screen bg-surface text-on-surface">

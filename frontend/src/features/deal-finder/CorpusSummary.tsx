@@ -23,7 +23,9 @@
  * We use the backend truth (conformal interval) and omit the misleading
  * "> 15%" text.
  */
+import { useTranslation } from 'react-i18next';
 import { ValuationCard } from '@/components';
+import { useLocale } from '@/lib/i18n/useLocale';
 
 interface CorpusSummaryProps {
   counts: { underpriced: number; fair: number; overpriced: number; total: number };
@@ -55,6 +57,8 @@ const DOT_BG = {
 };
 
 export function CorpusSummary({ counts, county }: CorpusSummaryProps) {
+  const { t } = useTranslation();
+  const locale = useLocale();
   const { underpriced, fair, overpriced, total } = counts;
   const pct = (n: number) => (total > 0 ? (n / total) * 100 : 0);
   const uPct = pct(underpriced);
@@ -73,7 +77,7 @@ export function CorpusSummary({ counts, county }: CorpusSummaryProps) {
               Total Assessed Corpus:
             </span>
             <span className="font-label-metric text-label-metric text-on-surface-variant">
-              {total.toLocaleString('en-KE')} listings analyzed{countyLabel}
+              {t('deals.corpusAnalyzed', { n: total.toLocaleString(locale) })}{countyLabel}
             </span>
           </div>
         </div>
@@ -84,21 +88,21 @@ export function CorpusSummary({ counts, county }: CorpusSummaryProps) {
             <div
               className="h-full rounded-l-full transition-all hover:opacity-90"
               style={{ width: `${uPct}%`, backgroundColor: COLORS.underpriced }}
-              title={`${underpriced} Underpriced (${uPct.toFixed(1)}%)`}
+              title={`${underpriced} ${t('common.underpriced')} (${uPct.toFixed(1)}%)`}
             />
           )}
           {fPct > 0 && (
             <div
               className="h-full transition-all hover:opacity-90"
               style={{ width: `${fPct}%`, backgroundColor: COLORS.fair }}
-              title={`${fair} Fairly priced (${fPct.toFixed(1)}%)`}
+              title={`${fair} ${t('common.fair')} (${fPct.toFixed(1)}%)`}
             />
           )}
           {oPct > 0 && (
             <div
               className="h-full rounded-r-full transition-all hover:opacity-90"
               style={{ width: `${oPct}%`, backgroundColor: COLORS.overpriced }}
-              title={`${overpriced} Overpriced (${oPct.toFixed(1)}%)`}
+              title={`${overpriced} ${t('common.overpriced')} (${oPct.toFixed(1)}%)`}
             />
           )}
         </div>
@@ -110,12 +114,12 @@ export function CorpusSummary({ counts, county }: CorpusSummaryProps) {
             <div className="flex items-center gap-2">
               <span className={`w-2.5 h-2.5 rounded-full ${DOT_BG.underpriced}`} />
               <span className={`font-label-metric text-label-metric ${TILE_TEXT.underpriced} font-semibold`}>
-                Underpriced
+                {t('common.underpriced')}
               </span>
             </div>
             <div className="flex items-baseline gap-1.5">
               <span className={`font-title-card text-title-card ${TILE_TEXT.underpriced} font-medium`}>
-                {underpriced.toLocaleString('en-KE')}
+                {underpriced.toLocaleString(locale)}
               </span>
               <span className={`font-caption-sm text-caption-sm ${TILE_TEXT.underpriced} opacity-80`}>
                 {uPct.toFixed(1)}%
@@ -128,12 +132,12 @@ export function CorpusSummary({ counts, county }: CorpusSummaryProps) {
             <div className="flex items-center gap-2">
               <span className={`w-2.5 h-2.5 rounded-full ${DOT_BG.fair}`} />
               <span className={`font-label-metric text-label-metric ${TILE_TEXT.fair} font-semibold`}>
-                Fairly priced
+                {t('common.fair')}
               </span>
             </div>
             <div className="flex items-baseline gap-1.5">
               <span className={`font-title-card text-title-card ${TILE_TEXT.fair} font-medium`}>
-                {fair.toLocaleString('en-KE')}
+                {fair.toLocaleString(locale)}
               </span>
               <span className={`font-caption-sm text-caption-sm opacity-80`} style={{ color: COLORS.fair }}>
                 {fPct.toFixed(1)}%
@@ -146,12 +150,12 @@ export function CorpusSummary({ counts, county }: CorpusSummaryProps) {
             <div className="flex items-center gap-2">
               <span className={`w-2.5 h-2.5 rounded-full ${DOT_BG.overpriced}`} />
               <span className={`font-label-metric text-label-metric ${TILE_TEXT.overpriced} font-semibold`}>
-                Overpriced
+                {t('common.overpriced')}
               </span>
             </div>
             <div className="flex items-baseline gap-1.5">
               <span className={`font-title-card text-title-card ${TILE_TEXT.overpriced} font-medium`}>
-                {overpriced.toLocaleString('en-KE')}
+                {overpriced.toLocaleString(locale)}
               </span>
               <span className={`font-caption-sm text-caption-sm ${TILE_TEXT.overpriced} opacity-80`}>
                 {oPct.toFixed(1)}%

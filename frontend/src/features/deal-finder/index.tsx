@@ -1,113 +1,131 @@
 /**
- * Deal Finder — the F6 screen.
+ * Deal Finder — the F6 screen (P4b real-data round).
  *
- * P4 fidelity pass: added corpus summary card (3-segment proportion bar
- * with real verdict counts via parallel API calls), header eyebrow label,
- * export button showing real filtered count, methodology note + footer
- * disclaimer.
- *
- * Layout (per 06_deal_finder/code.html):
- *   ┌──────────────────────────────────────────────────────────────────┐
- *   │ eyebrow: Market Arbitrage & Opportunity                          │
- *   │ Deal Finder                        [Saved Filters (n)] [Export N]│
- *   │ subtitle                            Deals                        │
- *   ├──────────────────────────────────────────────────────────────────┤
- *   │ Corpus summary: 3-segment bar + Under/Fair/Over tiles            │
- *   ├──────────────────────────────────────────────────────────────────┤
- *   │ Filters bar (County/Type/Verdict/Size/Amenity/Hide errors/Reset)│
- *   ├───────────────────────────────────────────────┬──────────────────┤
- *   │  Available Deals table (7 cols)               │  Detail panel    │
- *   │  with Notice column + selected row dot        │  (5 cols)        │
- *   ├───────────────────────────────────────────────┴──────────────────┤
- *   │  Pagination: Showing X-Y of N deals                              │
- *   ├──────────────────────────────────────────────────────────────────┤
- *   │  Methodology note + footer disclaimer                             │
- *   └──────────────────────────────────────────────────────────────────┘
- *
- * Filter state feeds `useListingsScored()`. Three parallel
- * `useListingsScored` calls (one per verdict, page_size=1) fetch the
- * total_rows for each verdict bucket so the corpus summary card shows
- * REAL whole-corpus counts, not just the current page.
- *
- * CSV export walks every page server-side (page_size=200) up to a
- * 2000-row hard cap — see `csv-export.ts`'s `exportAllListingsCsv`.
+ * Changes:
+ *  - SORT IS SERVER-SIDE: the Best/Worst toggle sends `sort` + `order`
+ *    to /listings/scored and the CLIENT-side re-sort is deleted (page 2
+ *    is now the next-best set; desc is the exact reverse of asc).
+ *  - URL state: ?county=&type=&verdict=&flagged=&amenity=&radius=&sort=&order=&page=&size=
+ *    read on mount (invalid values ignored) and written on change.
+ *  - Filters render from `useListingsOptions()` (canonical types, exact
+ *    counties, data-derived verdict rules, amenity/radius lists with
+ *    availability gating, page sizes, sort keys).
+ *  - Export uses the streaming /listings/scored/export.csv endpoint
+ *    (blob download; in-page notice on truncation headers — no
+ *    window.alert, no client page-walking, no typed cap).
+ *  - DealMap draws REAL nearby listings from
+ *    /listings/{listingNo}/nearby.
+ *  - Changing a filter clamps page > total_pages to 1 and clears the
+ *    selected row when it's no longer in the result set.
+ *  - All strings via i18n; numbers via the locale helper; money via the
+ *    currency-aware formatters.
  */
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { PillButton } from '@/components';
-import { apiClient } from '@/lib/api/client';
-import { useCountyRowCounts, useListingsScored } from '@/lib/api/hooks';
-import type {
-  AmenityRadiusKm,
-  ListingsScoredFilters,
-  ListingsScoredRow,
-  NearAmenityFilter,
-  VerdictFilter,
-} from '@/lib/api/types';
+import { buildListingsExportUrl, useListingsOptions, useListingsScored } from '@/lib/api/hooks';
+import type { ListingsScoredFilters, ListingsScoredRow } from '@/lib/api/types';
 
 import { CorpusSummary } from './CorpusSummary';
 import { DealMap } from './DealMap';
 import { FiltersBar } from './FiltersBar';
 import { ListingDetailPanel } from './ListingDetailPanel';
 import { ResultsTable } from './ResultsTable';
-import { exportAllListingsCsv } from './csv-export';
+import { useLocale } from '@/lib/i18n/useLocale';
 
 const ALL_VALUE = 'all';
 
 export default function DealFinder() {
   const { t } = useTranslation();
-  const [searchParams] = useSearchParams();
+  const locale = useLocale();
+  const [searchParams, setSearchParams] = useSearchParams();
 
-  // G3 fix: read the county pre-filter from URL query params on initial
-  // load (set by Market Insights' "See listings in Deal Finder" button).
-  const initialCounty = useMemo(() => {
-    const param = searchParams.get('county');
-    return param ?? ALL_VALUE;
-  }, [searchParams]);
+  // ---- Options: every list + limit the filters render. ----
+  const optionsQ = useListingsOptions();
+  const options = optionsQ.data;
+  const optionsFailed = optionsQ.isError && !options;
 
-  const [county, setCounty] = useState<string>(initialCounty);
-  const [propType, setPropType] = useState<string>(ALL_VALUE);
-  const [verdict, setVerdict] = useState<VerdictFilter | null>(null);
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
-  const [sortAsc, setSortAsc] = useState(true);
+  // ---- Read the URL state on mount (invalid values ignored, no crash). ----
+  const [county, setCounty] = useState(() => {
+    const v = searchParams.get('county');
+    return v && v.trim() !== '' ? v : ALL_VALUE;
+  });  
+  const [propType, setPropType] = useState(() => {
+    const v = searchParams.get('type');
+    return v && v.trim() !== '' ? v : ALL_VALUE;
+  });  
+  const [verdict, setVerdict] = useState<string | null>(() => {
+    const v = searchParams.get('verdict');
+    return v === 'underpriced' || v === 'fair' || v === 'overpriced' ? v : null;
+  });  
+  const [showFlaggedOnly, setShowFlaggedOnly] = useState(() => searchParams.get('flagged') === 'true');  
+  const [hideDataErrors, setHideDataErrors] = useState(false);
+  const [nearAmenity, setNearAmenity] = useState<string | null>(() => {
+    const v = searchParams.get('amenity');
+    return v === 'school' || v === 'hospital' || v === 'tarmac_road' ? v : null;
+  });  
+  const [amenityRadius, setAmenityRadius] = useState<number>(() => {
+    const v = Number(searchParams.get('radius'));
+    return Number.isFinite(v) && v > 0 ? v : 3;
+  });  
+  const [sortKey, setSortKey] = useState<string>(() => {
+    const v = searchParams.get('sort');
+    return v && v.trim() !== '' ? v : 'listed_over_predicted';
+  });  
+  const [sortAsc, setSortAsc] = useState(() => searchParams.get('order') !== 'desc');
+  const [page, setPage] = useState(() => {
+    const v = Number(searchParams.get('page'));
+    return Number.isFinite(v) && v >= 1 ? Math.floor(v) : 1;
+  });  
+  const [pageSize, setPageSize] = useState(() => {
+    const v = Number(searchParams.get('size'));
+    return Number.isFinite(v) && v >= 1 ? Math.floor(v) : 20;
+  });  
   const [selectedListing, setSelectedListing] = useState<ListingsScoredRow | null>(null);
   const [isExporting, setIsExporting] = useState(false);
-  // P4: new filter state for amenity + data quality
-  const [nearAmenity, setNearAmenity] = useState<NearAmenityFilter | null>(null);
-  const [amenityRadius, setAmenityRadius] = useState<AmenityRadiusKm>(3);
-  const [hideDataErrors, setHideDataErrors] = useState(false);
+  const [exportNotice, setExportNotice] = useState<string | null>(null);
 
-  const rowCountsQ = useCountyRowCounts();
+  // ---- Default page size from the options when loaded (first time only). ----
+  const [pageSizeSeeded, setPageSizeSeeded] = useState(pageSize !== 20);
+  useEffect(() => {
+    if (options && !pageSizeSeeded && options.default_page_size !== pageSize) {
+      setPageSize(options.default_page_size);
+      setPageSizeSeeded(true);
+    }
+  }, [options, pageSizeSeeded, pageSize]);
 
-  const countyOptions = useMemo(
-    () => [
-      { value: ALL_VALUE, label: t('common.allCounties') },
-      ...(rowCountsQ.data?.counties ?? [])
-        .filter((c) => c.n_listings > 0)
-        .sort((a, b) => a.county.localeCompare(b.county))
-        .map((c) => ({ value: c.county, label: c.county })),
-    ],
-    [rowCountsQ.data, t],
+  // ---- Sync URL state (replace). ----
+  const syncUrl = useCallback(
+    (patch: Record<string, string | null>) => {
+      const params = new URLSearchParams(searchParams);
+      for (const [k, v] of Object.entries(patch)) {
+        if (v == null || v === '' || v === ALL_VALUE) params.delete(k);
+        else params.set(k, v);
+      }
+      setSearchParams(params, { replace: true });
+    },
+    [searchParams, setSearchParams],
   );
 
-  // Base filters shared by the main query and the 3 verdict-count queries.
+  // ---- Base filters shared by the verdict-count queries + the table. ----
   const baseFilters = useMemo(
     () => ({
       page: 1,
-      page_size: 1, // We only need total_rows, not actual rows
+      page_size: 1, // Only total_rows is needed for the counts.
       county: county === ALL_VALUE ? undefined : county,
       prop_type: propType === ALL_VALUE ? undefined : propType,
-      data_quality_flag: hideDataErrors ? true : undefined,
-      near_amenity: nearAmenity ?? undefined,
-      radius_km: nearAmenity ? amenityRadius : undefined,
+      data_quality_flag: showFlaggedOnly ? true : hideDataErrors ? false : undefined,
+      near_amenity: (nearAmenity as 'school' | 'hospital' | 'tarmac_road' | undefined) ?? undefined,
+      radius_km: nearAmenity ? (amenityRadius as 1 | 3 | 5) : undefined,
+      sort: sortKey as ListingsScoredFilters['sort'],
+      order: (sortAsc ? 'asc' : 'desc') as 'asc' | 'desc',
     }),
-    [county, propType, hideDataErrors, nearAmenity, amenityRadius],
+    [county, propType, showFlaggedOnly, hideDataErrors, nearAmenity, amenityRadius, sortKey, sortAsc],
   );
 
-  // P4: 3 parallel queries to get real verdict counts for the corpus summary.
+  // ---- 3 parallel verdict-count queries for the corpus summary. ----
   const underpricedQ = useListingsScored({ ...baseFilters, verdict: 'underpriced' });
   const fairQ = useListingsScored({ ...baseFilters, verdict: 'fair' });
   const overpricedQ = useListingsScored({ ...baseFilters, verdict: 'overpriced' });
@@ -119,29 +137,34 @@ export default function DealFinder() {
     return { underpriced: u, fair: f, overpriced: o, total: u + f + o };
   }, [underpricedQ.data, fairQ.data, overpricedQ.data]);
 
+  // ---- The table query: SERVER-side sort + order (no client re-sort). ----
   const filters: ListingsScoredFilters = useMemo(
     () => ({
       ...baseFilters,
       page,
       page_size: pageSize,
-      verdict: verdict ?? undefined,
-      sort: 'listed_over_predicted',
+      verdict: (verdict ?? undefined) as ListingsScoredFilters['verdict'],
     }),
     [baseFilters, page, pageSize, verdict],
   );
-
   const listingsQ = useListingsScored(filters);
 
-  const sortedRows = useMemo(() => {
+  // ---- Clamp page when it exceeds total_pages after a filter change,
+  //      and clear the selected row when it's no longer in the result. ----
+  const totalRows = listingsQ.data?.pagination.total_rows ?? 0;
+  const totalPages = Math.max(1, listingsQ.data?.pagination.total_pages ?? 1);
+  useEffect(() => {
+    if (page > totalPages) setPage(1);
+  }, [page, totalPages]);
+  useEffect(() => {
     const rows = listingsQ.data?.listings ?? [];
-    const copy = [...rows];
-    copy.sort((a, b) =>
-      sortAsc
-        ? a.listed_over_predicted - b.listed_over_predicted
-        : b.listed_over_predicted - a.listed_over_predicted,
-    );
-    return copy;
-  }, [listingsQ.data, sortAsc]);
+    if (
+      selectedListing?.listing_no != null &&
+      !rows.some((r) => r.listing_no === selectedListing.listing_no)
+    ) {
+      setSelectedListing(null);
+    }
+  }, [listingsQ.data, selectedListing?.listing_no]);  
 
   function resetPage() {
     setPage(1);
@@ -159,28 +182,54 @@ export default function DealFinder() {
     setVerdict(null);
     setNearAmenity(null);
     setAmenityRadius(3);
+    setShowFlaggedOnly(false);
     setHideDataErrors(false);
+    setSortKey('listed_over_predicted');
+    setSortAsc(true);
     resetPage();
+    syncUrl({
+      county: null,
+      type: null,
+      verdict: null,
+      amenity: null,
+      radius: null,
+      sort: null,
+      order: null,
+      page: null,
+    });
   }
 
+  // ---- Streaming export: blob download from the endpoint, truncation
+  //      notice from the X-Export-* headers (no window.alert). ----
   async function handleExport() {
     if (isExporting) return;
     setIsExporting(true);
+    setExportNotice(null);
     try {
-      const { capped, totalExported, totalAvailable } = await exportAllListingsCsv(
-        filters,
-        apiClient,
-      );
-      if (capped) {
-        window.alert(
-          `Export capped at ${totalExported} rows (${totalAvailable.toLocaleString(
-            'en-KE',
-          )} total match the current filters).`,
-        );
+      const url = buildListingsExportUrl(filters);
+      const resp = await fetch(`/api/v1${url}`);
+      if (!resp.ok) {
+        const body = await resp.json().catch(() => null);
+        throw new Error(body?.error?.message ?? `Export failed (${resp.status}).`);
+      }
+      const truncated = resp.headers.get('X-Export-Truncated') === 'true';
+      const total = resp.headers.get('X-Export-Total');
+      const blob = await resp.blob();
+      const downloadUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = downloadUrl;
+      a.download = url.includes('?')
+        ? `listings-${new URLSearchParams(url.split('?')[1]).toString().slice(0, 40)}.csv`
+        : 'listings.csv';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(downloadUrl);
+      if (truncated && total) {
+        setExportNotice(t('deals.exportTruncated', { n: total }));
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Export failed.';
-      window.alert(message);
+      setExportNotice(err instanceof Error ? err.message : t('common.error'));
     } finally {
       setIsExporting(false);
     }
@@ -188,9 +237,6 @@ export default function DealFinder() {
 
   const pagination = listingsQ.data?.pagination;
   const currentPage = pagination?.page ?? page;
-  const totalPages = Math.max(1, pagination?.total_pages ?? 1);
-  const totalRows = pagination?.total_rows ?? 0;
-  const exportCount = verdictCounts.total;
 
   return (
     <div className="flex flex-col gap-space-xl p-margin max-w-[1400px] mx-auto">
@@ -198,32 +244,22 @@ export default function DealFinder() {
       <header className="flex flex-col gap-space-md pt-2">
         <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-space-md">
           <div>
-            {/* P4: eyebrow label per design */}
             <div className="flex items-center gap-2 mb-1.5">
               <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-primary/10 text-primary">
-                <span className="material-symbols-outlined text-[16px]">local_offer</span>
+                <span className="material-symbols-outlined text-[16px]" aria-hidden="true">
+                  local_offer
+                </span>
               </span>
               <span className="font-label-uppercase text-label-uppercase text-primary uppercase tracking-widest font-semibold">
-                Market Arbitrage &amp; Opportunity
+                {t('deals.eyebrow')}
               </span>
             </div>
             <h1 className="font-outfit text-headline-page-mobile md:text-headline-page text-on-surface tracking-tight font-light">
               {t('deals.title')}
             </h1>
-            <p className="mt-1 text-body-regular text-secondary">
-              See whether each asking price looks low, fair or high compared with the model estimate.
-            </p>
+            <p className="mt-1 text-body-regular text-secondary">{t('deals.subtitle')}</p>
           </div>
-          {/* P4: right-hand actions per design */}
           <div className="flex items-center gap-3">
-            <PillButton
-              variant="secondary"
-              leadingIcon="tune"
-              onClick={() => {/* Saved filters — not yet implemented */}}
-              className="text-xs"
-            >
-              Saved Filters
-            </PillButton>
             <PillButton
               variant="secondary"
               leadingIcon={isExporting ? 'progress_activity' : 'file_download'}
@@ -231,40 +267,84 @@ export default function DealFinder() {
               disabled={isExporting}
               className="text-xs"
             >
-              {isExporting ? 'Exporting...' : `Export ${exportCount.toLocaleString('en-KE')} Deals`}
+              {isExporting
+                ? t('deals.exporting')
+                : t('deals.exportN', { n: verdictCounts.total.toLocaleString(locale) })}
             </PillButton>
           </div>
         </div>
+        {exportNotice && (
+          <p className="text-caption-sm text-market-caution" role="status">
+            {exportNotice}
+          </p>
+        )}
       </header>
 
       {/* ---- Corpus summary card ---- */}
-      <CorpusSummary
-        counts={verdictCounts}
-        county={county}
-      />
+      <CorpusSummary counts={verdictCounts} county={county} />
 
       {/* ---- Filters ---- */}
       <FiltersBar
-        countyOptions={countyOptions}
+        options={options}
+        optionsFailed={optionsFailed}
+        onRetryOptions={() => optionsQ.refetch()}
         county={county}
-        onCountyChange={(v) => { setCounty(v); resetPage(); }}
+        onCountyChange={(v) => {
+          setCounty(v);
+          resetPage();
+          syncUrl({ county: v === ALL_VALUE ? null : v, page: null });
+        }}
         propType={propType}
-        onPropTypeChange={(v) => { setPropType(v); resetPage(); }}
+        onPropTypeChange={(v) => {
+          setPropType(v);
+          resetPage();
+          syncUrl({ type: v === ALL_VALUE ? null : v, page: null });
+        }}
         verdict={verdict}
-        onVerdictChange={(v) => { setVerdict(v); resetPage(); }}
+        onVerdictChange={(v) => {
+          setVerdict(v);
+          resetPage();
+          syncUrl({ verdict: v, page: null });
+        }}
         pageSize={pageSize}
-        onPageSizeChange={(n) => { setPageSize(n); resetPage(); }}
+        onPageSizeChange={(n) => {
+          setPageSize(n);
+          setPageSizeSeeded(true);
+          resetPage();
+          syncUrl({ size: String(n), page: null });
+        }}
+        sortKey={sortKey}
+        onSortKeyChange={(v) => {
+          setSortKey(v);
+          resetPage();
+          syncUrl({ sort: v, page: null });
+        }}
         sortAsc={sortAsc}
-        onSortToggle={() => setSortAsc((v) => !v)}
+        onSortToggle={() => {
+          setSortAsc((v) => !v);
+          resetPage();
+          syncUrl({ order: sortAsc ? 'desc' : 'asc', page: null });
+        }}
         nearAmenity={nearAmenity}
-        onNearAmenityChange={(v) => { setNearAmenity(v); resetPage(); }}
+        onNearAmenityChange={(v) => {
+          setNearAmenity(v);
+          resetPage();
+          syncUrl({ amenity: v, radius: v ? String(amenityRadius) : null, page: null });
+        }}
         amenityRadius={amenityRadius}
-        onAmenityRadiusChange={(r) => { setAmenityRadius(r); resetPage(); }}
-        hideDataErrors={hideDataErrors}
-        onHideDataErrorsChange={(v) => { setHideDataErrors(v); resetPage(); }}
+        onAmenityRadiusChange={(r) => {
+          setAmenityRadius(r);
+          resetPage();
+          syncUrl({ radius: String(r), page: null });
+        }}
+        hideDataErrors={showFlaggedOnly ? true : hideDataErrors}
+        onHideDataErrorsChange={(v) => {
+          setShowFlaggedOnly(false);
+          setHideDataErrors(v);
+          resetPage();
+          syncUrl({ flagged: null, page: null });
+        }}
         onResetFilters={handleResetFilters}
-        onExport={handleExport}
-        isExporting={isExporting}
       />
 
       {/* ---- Table + detail panel grid ---- */}
@@ -274,100 +354,49 @@ export default function DealFinder() {
             isLoading={listingsQ.isLoading}
             isError={listingsQ.isError}
             error={listingsQ.error}
-            rows={sortedRows}
+            rows={listingsQ.data?.listings ?? []}
             selectedListingNo={selectedListing?.listing_no ?? null}
             onRowClick={handleRowClick}
             onRetry={() => listingsQ.refetch()}
+            sortKey={sortKey}
             sortAsc={sortAsc}
-            onSortToggle={() => setSortAsc((v) => !v)}
+            onSortToggle={() => {
+              setSortAsc((v) => !v);
+              resetPage();
+              syncUrl({ order: sortAsc ? 'desc' : 'asc', page: null });
+            }}
             totalRows={totalRows}
             county={county}
             currentPage={currentPage}
             pageSize={pageSize}
+            onPageChange={(p) => {
+              setPage(p);
+              syncUrl({ page: String(p) });
+            }}
           />
         </div>
         <div className="xl:col-span-5 flex flex-col gap-space-md">
-          {selectedListing &&
-            selectedListing.latitude != null &&
-            selectedListing.longitude != null && (
-              <DealMap selected={selectedListing} rows={sortedRows} />
-            )}
           {selectedListing && (
-            <ListingDetailPanel
-              listing={selectedListing}
-              onClose={() => setSelectedListing(null)}
-            />
+            <>
+              <DealMap selected={selectedListing} />
+              <ListingDetailPanel
+                listing={selectedListing}
+                onClose={() => setSelectedListing(null)}
+              />
+            </>
           )}
         </div>
       </div>
 
-      {/* ---- Pagination ---- */}
-      <Pagination
-        page={currentPage}
-        totalPages={totalPages}
-        totalRows={totalRows}
-        pageSize={pageSize}
-        verdict={verdict}
-        onPageChange={setPage}
-      />
-
-      {/* ---- Methodology note + footer ---- */}
+      {/* ---- Footer ---- */}
       <footer className="text-center px-space-xs pt-space-xl pb-4">
         <p className="text-caption-sm text-secondary opacity-80 leading-relaxed">
-          Statistical estimates, not official valuations. Verdicts use the model's 80% conformal
-          interval: listings below the lower bound are "underpriced", above the upper bound are
-          "overpriced", within the range are "fair".
+          {t('deals.methodologyFooter')}
         </p>
         <p className="text-caption-sm text-secondary opacity-70 leading-relaxed mt-0.5">
-          Map data © OpenStreetMap contributors. Ensemble model v1.
+          {t('deals.osmFooter')}
         </p>
       </footer>
-    </div>
-  );
-}
-
-interface PaginationProps {
-  page: number;
-  totalPages: number;
-  totalRows: number;
-  pageSize: number;
-  verdict: VerdictFilter | null;
-  onPageChange: (p: number) => void;
-}
-
-function Pagination({ page, totalPages, totalRows, pageSize, verdict, onPageChange }: PaginationProps) {
-  const canPrev = page > 1;
-  const canNext = page < totalPages;
-  const startIdx = totalRows > 0 ? (page - 1) * pageSize + 1 : 0;
-  const endIdx = Math.min(page * pageSize, totalRows);
-  const verdictLabel = verdict ? ` ${verdict} deals` : ' deals';
-
-  return (
-    <div className="flex items-center justify-between gap-4">
-      <p className="text-caption-sm text-secondary">
-        Showing {startIdx}-{endIdx} of {totalRows.toLocaleString('en-KE')}{verdictLabel}
-      </p>
-      <div className="flex items-center gap-2">
-        <PillButton
-          variant="secondary"
-          leadingIcon="arrow_back"
-          disabled={!canPrev}
-          onClick={() => onPageChange(page - 1)}
-        >
-          Prev
-        </PillButton>
-        <span className="text-label-metric font-label-metric text-on-surface tabular-nums">
-          {page} / {totalPages}
-        </span>
-        <PillButton
-          variant="secondary"
-          trailingIcon="arrow_forward"
-          disabled={!canNext}
-          onClick={() => onPageChange(page + 1)}
-        >
-          Next
-        </PillButton>
-      </div>
     </div>
   );
 }

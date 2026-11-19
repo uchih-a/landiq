@@ -1,71 +1,95 @@
 /**
- * ErrorBySupportBars — "Error by listings nearby" chart.
+ * ErrorBySupportBars — "Error by listings nearby" card (P5b real-data round).
  *
- * P5 wiring (known-gaps #49 RESOLVED). Data comes from
- * `GET /api/v1/model/error-by-support` — the backend returns
- * error_by_support.csv (Cell 9.9) with two groups:
- *  - county_listings: error by county listing count bands
- *  - nearby_within_50km: error by nearby-listing count bands
- *
- * We display the `nearby_within_50km` group (5 buckets) as horizontal
- * bars showing OOF MAE (log-scale, converted to a percentage for
- * readability). The sparse bucket (<5 listings) uses the P1 diagonal-hatch
- * pattern to indicate low-confidence territory.
+ * The endpoint data was ALREADY wired (the P5 fidelity pass) — this
+ * round makes it data-driven end-to-end:
+ *  - bands ordered by the response's `band_order` (never parsed from
+ *    strings like "<10 (below COVERAGE_MIN_COUNTY_N)");
+ *  - band labels verbatim from the response (any embedded threshold is
+ *    the notebook's own export text);
+ *  - approximate typical error % via exp(oof_mae)-1 (labelled
+ *    approximate; the raw log value stays in the tooltip);
+ *  - "n = N" per band; low-n bands marked "limited sample" using the
+ *    min-n value from /meta (never typed);
+ *  - loading / error + retry / empty states;
+ *  - strings via i18n; numbers via the locale helper.
  */
 import { useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 
 import { EmptyState, LoadingSkeleton, ValuationCard } from '@/components';
+import { useMeta } from '@/lib/api/hooks';
 import type { ApiQueryResult } from '@/lib/api/hooks';
 import type { ErrorBySupportResponse, ErrorBySupportRow } from '@/lib/api/types';
+import { useLocale } from '@/lib/i18n/useLocale';
+import {
+  CHART_COLOR_OUTLINE as HATCH_STROKE,
+  CHART_COLOR_PRIMARY_CONTAINER as BAR_COLOR,
+} from '@/lib/ui/chart-tokens';
+import { logErrorToPct } from './metrics-helpers';
 
 interface Props {
   query: ApiQueryResult<ErrorBySupportResponse>;
 }
 
-const HATCH_STROKE = '#dec1b3';
-const BAR_COLOR = '#e8742a';
-
 interface Bucket {
   band: string;
-  n_listings: number;
-  mae_pct: number; // MAE as a percentage of the median (for readability)
+  bandOrder: number;
+  nListings: number;
+  maePct: number; // approximate typical-miss % via exp(mae)-1
+  logMae: number;
   isSparse: boolean;
 }
 
-/** Convert log-scale MAE to a rough percentage of typical price. */
-function maeToPct(logMae: number): number {
-  // exp(logMae) is the absolute error in log space; converting to a
-  // percentage of typical price: (exp(mae) - 1) × 100 gives the relative
-  // error. For small log errors this approximates the log value × 100.
-  return Math.round((Math.exp(logMae) - 1) * 100);
-}
-
 export function ErrorBySupportBars({ query }: Props) {
+  const { t } = useTranslation();
+  const locale = useLocale();
+  const metaQ = useMeta();
+  // The min-n value from /meta (never typed) drives the "limited sample"
+  // marking — the same threshold the rest of the app surfaces.
+  const minCountyN = metaQ.data?.coverage?.min_county_n ?? null;
+
   const { data, isLoading, isError, refetch } = query;
 
-  const buckets: Bucket[] = useMemo(() => {
+  const buckets = useMemo<Bucket[]>(() => {
     if (!data?.rows) return [];
-    // Filter to the nearby_within_50km measure (the design shows 5 buckets)
-    const nearby = data.rows.filter((r) => r.support_measure === 'nearby_within_50km');
-    return nearby.map((r: ErrorBySupportRow) => ({
-      band: r.band,
-      n_listings: r.n_listings,
-      mae_pct: maeToPct(r.oof_mae),
-      // Sparse = <5 listings nearby (the first bucket)
-      isSparse: r.band.includes('<5') || r.band.includes('< 5'),
-    }));
-  }, [data]);
+    // The design shows the nearby-listings measure; fall back to the
+    // first present group when only one exists.
+    const measures = data.support_measures?.map((m) => m.value) ?? [];
+    const measure =
+      measures.includes('nearby_within_50km')
+        ? 'nearby_within_50km'
+        : (measures[0] as string | undefined);
+    const rows = data.rows.filter(
+      (r) => measure == null || r.support_measure === measure,
+    );
+    // P5b: order by band_order (the backend's ordinal), never a
+    // client-side string parse.
+    return rows
+      .slice()
+      .sort((a, b) => a.band_order - b.band_order)
+      .map((r: ErrorBySupportRow) => ({
+        band: r.band,
+        bandOrder: r.band_order,
+        nListings: r.n_listings,
+        maePct: logErrorToPct(r.oof_mae),
+        logMae: r.oof_mae,
+        // Sparse = n below the /meta min-n (null threshold -> not marked,
+        // never a guessed number).
+        isSparse: minCountyN != null ? r.n_listings < minCountyN : false,
+      }));
+  }, [data, minCountyN]);
 
-  const maxMae = Math.max(1, ...buckets.map((b) => b.mae_pct));
+  const maxMae = Math.max(1, ...buckets.map((b) => b.maePct));
 
   return (
     <ValuationCard noPadding>
       <div className="p-space-lg">
         <h2 className="font-headline-section text-headline-section text-on-surface">
-          Error by listings nearby
+          {t('model.errorBySupport')}
         </h2>
         <p className="font-body-regular text-secondary mt-0.5">
-          How prediction error varies with the number of nearby listings used as support.
+          {t('model.errorBySupportSubtitle')}
         </p>
 
         <div className="mt-space-md">
@@ -74,34 +98,43 @@ export function ErrorBySupportBars({ query }: Props) {
           ) : isError ? (
             <EmptyState
               icon="cloud_off"
-              title="Couldn't load error data"
-              message="The error-by-support feed is unavailable."
-              actionLabel="Retry"
+              title={t('common.dataUnavailable')}
+              message={t('model.errorBySupportLoadFailed')}
+              actionLabel={t('common.retry')}
               onAction={() => refetch()}
             />
           ) : buckets.length === 0 ? (
             <EmptyState
               icon="bar_chart"
-              title="No error data"
-              message="No error-by-support data available."
+              title={t('model.noErrorDataTitle')}
+              message={t('model.noErrorDataMessage')}
             />
           ) : (
             <div className="flex flex-col gap-3">
               {buckets.map((b) => (
-                <div key={b.band} className="flex flex-col gap-1">
+                <div key={`${b.band}-${b.bandOrder}`} className="flex flex-col gap-1">
                   <div className="flex items-center justify-between text-xs">
+                    {/* Band label verbatim from the response — any
+                        embedded threshold is the notebook's own export
+                        text, never re-derived client-side. */}
                     <span className="text-on-surface font-medium">{b.band}</span>
                     <span className="text-secondary tabular-nums">
-                      {b.n_listings.toLocaleString('en-KE')} listings · ±{b.mae_pct}% error
+                      {t('model.errorBySupportRow', {
+                        n: b.nListings.toLocaleString(locale),
+                        pct: b.maePct.toFixed(0),
+                      })}
                     </span>
                   </div>
-                  <div className="relative h-4 w-full bg-surface-container-highest rounded-full overflow-hidden">
-                    {/* Sparse bucket: hatched fill. Normal: solid orange fill. */}
+                  <div
+                    className="relative h-4 w-full bg-surface-container-highest rounded-full overflow-hidden"
+                    title={t('model.logMaeTitle', { v: b.logMae.toFixed(3) })}
+                  >
+                    {/* Sparse band: hatched fill. Normal: solid orange. */}
                     {b.isSparse ? (
                       <div
                         className="absolute left-0 top-0 bottom-0 rounded-full"
                         style={{
-                          width: `${(b.mae_pct / maxMae) * 100}%`,
+                          width: `${(b.maePct / maxMae) * 100}%`,
                           backgroundImage: `repeating-linear-gradient(45deg, ${HATCH_STROKE}, ${HATCH_STROKE} 1.25px, transparent 1.25px, transparent 8px)`,
                           opacity: 0.7,
                         }}
@@ -109,10 +142,15 @@ export function ErrorBySupportBars({ query }: Props) {
                     ) : (
                       <div
                         className="absolute left-0 top-0 bottom-0 rounded-full transition-all duration-300"
-                        style={{ width: `${(b.mae_pct / maxMae) * 100}%`, backgroundColor: BAR_COLOR }}
+                        style={{ width: `${(b.maePct / maxMae) * 100}%`, backgroundColor: BAR_COLOR }}
                       />
                     )}
                   </div>
+                  {b.isSparse && (
+                    <span className="text-[10px] text-secondary italic">
+                      {t('model.limitedSample')}
+                    </span>
+                  )}
                 </div>
               ))}
             </div>
@@ -120,7 +158,7 @@ export function ErrorBySupportBars({ query }: Props) {
         </div>
 
         <p className="text-caption-sm text-secondary mt-3">
-          Error decreases as nearby listing density increases. Hatched bars indicate sparse support where error estimates are less reliable.
+          {t('model.errorBySupportNote')}
         </p>
       </div>
     </ValuationCard>

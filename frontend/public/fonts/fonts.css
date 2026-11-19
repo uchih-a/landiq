@@ -1,0 +1,20 @@
+/* Local font faces — served from /public/fonts/ so the app works without
+   internet access (Playwright sandbox has no fonts.googleapis.com). */
+
+/* Outfit (variable) */
+@font-face {
+  font-family: 'Outfit';
+  font-style: normal;
+  font-weight: 100 700;
+  font-display: swap;
+  src: url('/fonts/outfit-latin-wght-normal.woff2') format('woff2-variations');
+}
+
+/* Material Symbols Outlined */
+@font-face {
+  font-family: 'Material Symbols Outlined';
+  font-style: normal;
+  font-weight: 100 700;
+  font-display: swap;
+  src: url('/fonts/material-symbols/material-symbols-outlined.woff2') format('woff2');
+}

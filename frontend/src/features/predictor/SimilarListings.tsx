@@ -10,6 +10,9 @@
  * Notebook 1's `list_date` is empty for every listing, so fabricating a
  * value would mislead the user). We therefore render NO "days ago" field
  * here, mirroring the backend's deliberate omission.
+ *
+ * P2b: all user-visible strings via i18n.  Money honours the KSh/USD
+ * toggle (formatMoney is currency-aware).
  */
 import { useTranslation } from 'react-i18next';
 
@@ -30,11 +33,11 @@ function toVerdict(v: string): Verdict {
   return 'constrained';
 }
 
-function titleOrFallback(c: ComparableListing): string {
+function titleOrFallback(c: ComparableListing, fallback: string): string {
   if (c.title && c.title.trim().length > 0) return c.title;
   if (c.location && c.location.trim().length > 0) return c.location;
   if (c.county && c.county.trim().length > 0) return c.county;
-  return 'Untitled listing';
+  return fallback;
 }
 
 export function SimilarListings({ comparables }: SimilarListingsProps) {
@@ -47,7 +50,7 @@ export function SimilarListings({ comparables }: SimilarListingsProps) {
       </h3>
       <ul className="flex flex-col gap-1 max-h-96 overflow-y-auto pr-1">
         {comparables.length === 0 ? (
-          <li className="text-caption-sm text-secondary py-2">No similar listings within range.</li>
+          <li className="text-caption-sm text-secondary py-2">{t('predictor.noSimilarListings')}</li>
         ) : (
           comparables.map((c, i) => (
             <li
@@ -56,10 +59,13 @@ export function SimilarListings({ comparables }: SimilarListingsProps) {
             >
               <div className="flex flex-col min-w-0 flex-1 gap-0.5">
                 <span className="text-body-medium font-body-medium text-on-surface truncate">
-                  {titleOrFallback(c)}
+                  {titleOrFallback(c, t('predictor.untitledListing'))}
                 </span>
                 <span className="text-caption-sm text-secondary">
-                  {c.size_acres} acres · {c.distance_km.toFixed(1)} km away
+                  {t('predictor.acresAway', {
+                    size: c.size_acres,
+                    distance: c.distance_km.toFixed(1),
+                  })}
                 </span>
               </div>
               <div className="flex flex-col items-end gap-0.5 flex-shrink-0">
@@ -67,7 +73,7 @@ export function SimilarListings({ comparables }: SimilarListingsProps) {
                   {formatMoney(c.listed_price_per_acre_ksh)}
                 </span>
                 <span className="text-caption-sm text-secondary">
-                  pred. {formatMoney(c.predicted_price_per_acre_ksh)}
+                  {t('predictor.predictedLabel', { value: formatMoney(c.predicted_price_per_acre_ksh) })}
                 </span>
               </div>
               <ValuationChip verdict={toVerdict(c.verdict)} />

@@ -654,13 +654,20 @@ class TestListingsScored:
         body2 = resp2.json()
         assert len(body2["listings"]) == 1
 
-    def test_filter_by_county_substring_case_insensitive(self, app_with_exports, client):
-        resp = client.get("/api/v1/listings/scored?county=NAIR")
+    def test_filter_by_county_exact_case_insensitive(self, app_with_exports, client):
+        """P4b: county is an EXACT case-insensitive match (was substring).
+        Substrings that match no full county name now 422 with `allowed`."""
+        # Exact match in different casing still works.
+        resp = client.get("/api/v1/listings/scored?county=NAIROBI")
         assert resp.status_code == 200
         body = resp.json()
         assert body["pagination"]["total_rows"] == 1
         assert body["listings"][0]["county"] == "Nairobi"
-        assert body["pagination"]["filters"]["county"] == "NAIR"
+        assert body["pagination"]["filters"]["county"] == "NAIROBI"
+        # A substring that matches no full county name -> 422.
+        resp2 = client.get("/api/v1/listings/scored?county=NAIR")
+        assert resp2.status_code == 422
+        assert "allowed" in resp2.json()["error"]["details"]
 
     def test_filter_by_verdict(self, app_with_exports, client):
         resp = client.get("/api/v1/listings/scored?verdict=underpriced")
