@@ -36,10 +36,10 @@ import type {
 /** Tab ids are structural; labels render from i18n via `labelKey`. */
 export const TABS = [
   { id: 'quality', labelKey: 'de.tab.quality', designed: true },
-  { id: 'prices', labelKey: 'de.tab.prices', designed: false },
-  { id: 'locations', labelKey: 'de.tab.locations', designed: false },
-  { id: 'relationships', labelKey: 'de.tab.relationships', designed: false },
-  { id: 'table', labelKey: 'de.tab.table', designed: false },
+  { id: 'prices', labelKey: 'de.tab.prices', designed: true },
+  { id: 'locations', labelKey: 'de.tab.locations', designed: true },
+  { id: 'relationships', labelKey: 'de.tab.relationships', designed: true },
+  { id: 'table', labelKey: 'de.tab.table', designed: true },
 ] as const;
 
 export type DataExplorerTab = (typeof TABS)[number]['id'];

@@ -1160,6 +1160,85 @@
         }
       }
     },
+    "/api/v1/data/price-by-group": {
+      "get": {
+        "tags": [
+          "data"
+        ],
+        "summary": "Price By Group",
+        "description": "Per-group price-per-acre summary over the usable frame.\n\nGroups come from the canonical ``PROPERTY_TYPES`` list\n(``group=prop_type``) or the canonical ``SIZE_BANDS_ACRES`` edges\n(``group=size_band``) \u2014 the router never invents a group.  Groups with\nfewer than ``MIN_GROUP_N`` usable listings return null stats and\n``insufficient=True`` (an honest \"not enough data\" rather than a noisy\nmedian on two rows); ``n`` is always the real count.",
+        "operationId": "price_by_group_api_v1_data_price_by_group_get",
+        "parameters": [
+          {
+            "name": "group",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Group dimension: 'prop_type' or 'size_band'",
+              "title": "Group"
+            },
+            "description": "Group dimension: 'prop_type' or 'size_band'"
+          },
+          {
+            "name": "include_suspect",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Include suspect listings (default: exclude, as the Deal Finder corpus does)",
+              "default": false,
+              "title": "Include Suspect"
+            },
+            "description": "Include suspect listings (default: exclude, as the Deal Finder corpus does)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PriceByGroupResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/data/relationships": {
+      "get": {
+        "tags": [
+          "data"
+        ],
+        "summary": "Relationships",
+        "description": "size_acres vs listed price/acre over the usable frame.\n\nReturns:\n\n- ``spearman_rho`` \u2014 ``df.corr(method='spearman')`` over the FULL\n  usable frame (not the sample);\n- ``deciles`` \u2014 10 equal-count log-size bins of the usable frame, each\n  with its median listed price/acre + count;\n- ``sample`` \u2014 a DETERMINISTIC uniform random sample of\n  ``RELATIONSHIPS_SAMPLE_N`` usable rows (seeded; never top-N or\n  first-N) carrying listing_no, size_acres, listed_price_per_acre_ksh,\n  is_suspect, data_quality_flag.\n\nUsable = finite size_acres AND finite, strictly-positive listed\nprice/acre.  Suspects are INCLUDED (the scatter's \"hide suspect\" toggle\nis a client-side filter; the backend returns the full picture so the\ntoggle can show/hide without a refetch).",
+        "operationId": "relationships_api_v1_data_relationships_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RelationshipsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/overview/summary": {
       "get": {
         "tags": [
@@ -2018,6 +2097,30 @@
               }
             ],
             "title": "N Below Min County N"
+          },
+          "n_suspect": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "N Suspect",
+            "description": "Suspect listings in this county (Part B gate); null when the scored frame is unavailable"
+          },
+          "share_suspect": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Share Suspect",
+            "description": "n_suspect / n_listings; null when n_listings is 0 or the scored frame is unavailable"
           }
         },
         "type": "object",
@@ -5026,6 +5129,123 @@
         "title": "PriceBin",
         "description": "One histogram bin on the log10 price axis.\n\n``lower_ksh`` / ``upper_ksh`` are the bin edges in KSh per acre\n(inclusive-exclusive, except the final bin which includes its upper\nedge).  ``count`` is the number of usable listings in the bin."
       },
+      "PriceByGroupResponse": {
+        "properties": {
+          "group": {
+            "type": "string",
+            "title": "Group",
+            "description": "The group dimension requested"
+          },
+          "include_suspect": {
+            "type": "boolean",
+            "title": "Include Suspect"
+          },
+          "n_usable": {
+            "type": "integer",
+            "title": "N Usable",
+            "description": "Total usable rows the groups were built from"
+          },
+          "min_group_n": {
+            "type": "integer",
+            "title": "Min Group N",
+            "description": "MIN_GROUP_N from canonical.py"
+          },
+          "bands": {
+            "items": {
+              "$ref": "#/components/schemas/PriceByGroupRow"
+            },
+            "type": "array",
+            "title": "Bands",
+            "description": "One row per canonical group, in canonical order"
+          }
+        },
+        "type": "object",
+        "required": [
+          "group",
+          "include_suspect",
+          "n_usable",
+          "min_group_n",
+          "bands"
+        ],
+        "title": "PriceByGroupResponse",
+        "description": "GET /api/v1/data/price-by-group response.\n\nUsable = finite, strictly-positive ``listed_price_per_acre_ksh`` (and\nnot ``is_suspect`` unless ``include_suspect=true``).  The groups come\nfrom the canonical ``PROPERTY_TYPES`` list (``group=prop_type``) or the\ncanonical ``SIZE_BANDS_ACRES`` edges (``group=size_band``) \u2014 never\ninvented in the router.  ``min_group_n`` echoes the canonical threshold\nso the UI never re-types it."
+      },
+      "PriceByGroupRow": {
+        "properties": {
+          "group": {
+            "type": "string",
+            "title": "Group",
+            "description": "Group label (prop_type value or size-band label key)"
+          },
+          "n": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "N",
+            "description": "Usable listings in this group"
+          },
+          "insufficient": {
+            "type": "boolean",
+            "title": "Insufficient",
+            "description": "True when n < MIN_GROUP_N (stats are null)"
+          },
+          "median_listed_per_acre_ksh": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Median Listed Per Acre Ksh",
+            "description": "Median listed price per acre (KSh); null when insufficient"
+          },
+          "p10_listed_per_acre_ksh": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P10 Listed Per Acre Ksh",
+            "description": "10th percentile of listed price per acre (KSh); null when insufficient"
+          },
+          "p90_listed_per_acre_ksh": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P90 Listed Per Acre Ksh",
+            "description": "90th percentile of listed price per acre (KSh); null when insufficient"
+          },
+          "median_predicted_per_acre_ksh": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Median Predicted Per Acre Ksh",
+            "description": "Median predicted price per acre (KSh); null when insufficient"
+          }
+        },
+        "type": "object",
+        "required": [
+          "group",
+          "n",
+          "insufficient"
+        ],
+        "title": "PriceByGroupRow",
+        "description": "One group's price-per-acre summary.\n\n``insufficient`` is true (and every stat null) when the group has fewer\nthan ``MIN_GROUP_N`` usable listings \u2014 a noisy median on two rows is\nworse than an honest \"not enough data\".  ``n`` is always the real count\n(even when insufficient) so the UI can show \"n=3, not enough data\"."
+      },
       "PriceDistributionResponse": {
         "properties": {
           "n_bins": {
@@ -5211,6 +5431,162 @@
         ],
         "title": "PropertyTypeStat",
         "description": "One bar in the Price-by-property-type card.  ``n`` may be 0 (the\nfrontend renders an empty/muted bar, never a zero-height bar that\nreads as a price)."
+      },
+      "RelationshipsDecilePoint": {
+        "properties": {
+          "decile": {
+            "type": "integer",
+            "maximum": 10.0,
+            "minimum": 1.0,
+            "title": "Decile",
+            "description": "Decile index 1..10 (1 = smallest log-size)"
+          },
+          "n": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "N",
+            "description": "Usable rows in this decile"
+          },
+          "median_listed_per_acre_ksh": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Median Listed Per Acre Ksh",
+            "description": "Median listed price/acre (KSh); null when n=0"
+          },
+          "median_size_acres": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Median Size Acres",
+            "description": "Median size (acres) in this decile; null when n=0"
+          }
+        },
+        "type": "object",
+        "required": [
+          "decile",
+          "n"
+        ],
+        "title": "RelationshipsDecilePoint",
+        "description": "Median listed price/acre for one log-size decile of the usable frame."
+      },
+      "RelationshipsResponse": {
+        "properties": {
+          "n_usable": {
+            "type": "integer",
+            "title": "N Usable",
+            "description": "Usable rows (finite size + finite positive price)"
+          },
+          "n_total": {
+            "type": "integer",
+            "title": "N Total",
+            "description": "Total rows in the frame (before the usable filter)"
+          },
+          "spearman_rho": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spearman Rho",
+            "description": "Spearman rho of size_acres vs listed_price_per_acre_ksh over the full usable frame; null when <2 usable rows"
+          },
+          "deciles": {
+            "items": {
+              "$ref": "#/components/schemas/RelationshipsDecilePoint"
+            },
+            "type": "array",
+            "title": "Deciles"
+          },
+          "sample": {
+            "items": {
+              "$ref": "#/components/schemas/RelationshipsSamplePoint"
+            },
+            "type": "array",
+            "title": "Sample"
+          },
+          "sample_n": {
+            "type": "integer",
+            "title": "Sample N",
+            "description": "Rows actually returned (min(RELATIONSHIPS_SAMPLE_N, n_usable))"
+          },
+          "sample_seed": {
+            "type": "integer",
+            "title": "Sample Seed",
+            "description": "The deterministic seed (RELATIONSHIPS_SAMPLE_SEED)"
+          },
+          "min_group_n": {
+            "type": "integer",
+            "title": "Min Group N",
+            "description": "MIN_GROUP_N from canonical.py (echoed for the UI)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "n_usable",
+          "n_total",
+          "deciles",
+          "sample",
+          "sample_n",
+          "sample_seed",
+          "min_group_n"
+        ],
+        "title": "RelationshipsResponse",
+        "description": "GET /api/v1/data/relationships response.\n\n``spearman_rho`` is computed over the FULL usable frame (not the\nsample) with ``df.corr(method='spearman')``.  ``deciles`` split the\nusable frame into 10 equal-count log-size bins and give each decile's\nmedian price/acre + count.  ``sample`` is a deterministic uniform\nrandom draw of ``RELATIONSHIPS_SAMPLE_N`` rows (seeded) \u2014 never top-N\nor first-N \u2014 so the scatter is unbiased and reproducible."
+      },
+      "RelationshipsSamplePoint": {
+        "properties": {
+          "listing_no": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Listing No"
+          },
+          "size_acres": {
+            "type": "number",
+            "title": "Size Acres"
+          },
+          "listed_price_per_acre_ksh": {
+            "type": "number",
+            "title": "Listed Price Per Acre Ksh"
+          },
+          "is_suspect": {
+            "type": "boolean",
+            "title": "Is Suspect"
+          },
+          "data_quality_flag": {
+            "type": "boolean",
+            "title": "Data Quality Flag"
+          }
+        },
+        "type": "object",
+        "required": [
+          "listing_no",
+          "size_acres",
+          "listed_price_per_acre_ksh",
+          "is_suspect",
+          "data_quality_flag"
+        ],
+        "title": "RelationshipsSamplePoint",
+        "description": "One row of the deterministic uniform sample.\n\n``data_quality_flag`` is the parquet's flag (the 1st-99th percentile\ntrim); ``is_suspect`` is the Part B gate.  Both are surfaced so the UI's\n\"hide suspect\" toggle and the flag styling both work off the sample."
       },
       "ScatterPoint": {
         "properties": {

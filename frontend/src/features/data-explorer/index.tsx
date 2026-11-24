@@ -75,6 +75,7 @@ import {
   ProvenanceCard,
   SampleRecordsCard,
 } from './sections';
+import { LocationsTab, PricesTab, RelationshipsTab, TableTab } from './tabs';
 
 /** County table rows per page — display density, not a data fact. */
 const PAGE_SIZE = 10;
@@ -149,15 +150,19 @@ export default function DataExplorer() {
   const flagDefinition = priceDistQ.data?.flag_definition ?? metaQ.data?.flag_definition ?? null;
 
   if (tab !== 'quality') {
-    const label = t(TABS.find((tt) => tt.id === tab)?.labelKey ?? 'de.tab.quality');
+    // A2 + B4: every non-quality tab now has a real design.
     return (
       <div className="flex flex-col gap-space-xl p-margin max-w-[1400px] mx-auto">
         <DataExplorerHeader tab={tab} onTab={setTab} />
-        <EmptyState
-          icon="construction"
-          title={t('de.tabSoonTitle', { tab: label })}
-          message={`${t('de.tabSoonQualityNote')} ${t(`de.tabSoon.${tab}`)}`}
-        />
+        {tab === 'table' && <TableTab />}
+        {tab === 'prices' && <PricesTab />}
+        {tab === 'relationships' && <RelationshipsTab />}
+        {tab === 'locations' && <LocationsTab />}
+        <footer className="text-center px-space-xs pt-space-xl pb-4">
+          <p className="font-caption-sm text-secondary opacity-80 leading-relaxed">
+            {t('de.footer.disclaimer')}
+          </p>
+        </footer>
       </div>
     );
   }

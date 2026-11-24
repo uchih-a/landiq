@@ -66,6 +66,21 @@ class CountySummaryRow(BaseModel):
     mean_log_price_per_acre: float | None = None
     water_body_distance_share: float | None = None
     n_below_min_county_n: bool | None = None
+    #: Part B3: suspect-listing count for this county (computed at serve
+    #: time from listings_scored via the suspect gate; null when the scored
+    #: frame is unavailable).  Powers the Locations tab's "share suspect"
+    #: choropleth metric.
+    n_suspect: int | None = Field(
+        None,
+        description="Suspect listings in this county (Part B gate); null when the scored frame is unavailable",
+    )
+    #: Part B3: n_suspect / n_listings (0..1); null when n_listings is 0 or
+    #: the scored frame is unavailable.  Used by the choropleth's "share
+    #: suspect" metric so the UI never divides by zero.
+    share_suspect: float | None = Field(
+        None,
+        description="n_suspect / n_listings; null when n_listings is 0 or the scored frame is unavailable",
+    )
 
 
 class CountySummaryResponse(BaseModel):

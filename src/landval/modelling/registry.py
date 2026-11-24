@@ -67,6 +67,12 @@ _MODEL_FILES = {
     "tabnet": "tabnet_model.zip",
 }
 
+# Weight consistency tolerance: serving_manifest weights vs ensemble_weights.
+_WEIGHTS_TOL = 1e-6
+# Imputation consistency tolerance: manifest imputation_values vs the medians
+# stored in preprocessing.json["preprocessor"]["medians"].
+_IMPUTATION_TOL = 1e-9
+
 
 @dataclass
 class ModelRegistry:
@@ -115,6 +121,8 @@ class ModelRegistry:
     load_time_s: float = 0.0
     memory_mb: float = 0.0
     missing_files: list[str] = field(default_factory=list)
+    # Startup-guard outcomes ("pass" | "skipped:<reason>") for the load report.
+    guards: dict[str, str] = field(default_factory=dict)
 
     # ------------------------------------------------------------------ paths
     def _path(self, *parts: str) -> str:
@@ -158,6 +166,13 @@ class ModelRegistry:
             self._load_models_from_manifest()
             self._build_preprocessor()
             self._load_coverage_and_errors()
+            # Startup consistency guards (weights / imputation / XGB format).
+            # These run AFTER the files load so a failure surfaces the guard's
+            # specific message rather than a generic missing-file error.
+            self.guards["weights_vs_ensemble_weights"] = self._check_weights_against_ensemble_weights()
+            self.guards["imputation_vs_preprocessing"] = self._check_imputation_against_preprocessing()
+            # (the XGB base_score guard runs inside _load_one_model and
+            # records its outcome on self.guards["xgb_base_score_format"])
             # Any missing file recorded along the way becomes a hard error.
             if self.missing_files:
                 raise ModelLoadError(self._missing_message())
@@ -238,6 +253,7 @@ class ModelRegistry:
         if member == "xgb":
             import xgboost as xgb
 
+            self.guards["xgb_base_score_format"] = self._check_xgb_base_score_format(path)
             model = xgb.XGBRegressor()
             model.load_model(path)
             # Re-apply enable_categorical exactly as Cell 8.3 does, so a
@@ -257,6 +273,163 @@ class ModelRegistry:
             model.load_model(path)
             return model
         raise ModelLoadError(f"unknown ensemble member '{member}' in serving_manifest")
+
+    # ------------------------------------------------------------------ guards
+    def _check_weights_against_ensemble_weights(self) -> None:
+        """Guard (a): serving_manifest weights must equal ensemble_weights.json.
+
+        ``serving_manifest.json``'s ``models_to_load[*].weight_after_renormalisation``
+        is what the backend serves with; ``ensemble_weights.json`` is what the
+        notebook's production run solved (and the file that reproduces the
+        stored ensemble predictions).  When no members were pruned the two must
+        agree — a drift means every served ensemble prediction is silently
+        wrong.  (This exact failure shipped live: manifest weights
+        0.6211/0.2929/0.0860 vs ensemble_weights.json 0.2295/0.6683/0.1022.)
+
+        Skipped (no error) when ``ensemble_weights.json`` is absent or when
+        members were pruned (``dropped_models`` non-empty) — after pruning the
+        survivors are legitimately renormalised away from the originals.
+        Raises ``ModelLoadError`` when any kept weight differs from
+        ``weights[model_order.index(k)]`` by more than ``_WEIGHTS_TOL``.
+        Returns the guard outcome ("pass" | "skipped:<reason>") for the load
+        report.
+        """
+        path = self._path("ensemble_weights.json")
+        if not os.path.exists(path):
+            return "skipped:ensemble_weights.json absent"
+        with open(path) as f:
+            ew = json.load(f)
+        if not ew:
+            return "skipped:ensemble_weights.json empty"
+        if self.dropped_models:
+            return "skipped:members were pruned (dropped_models non-empty)"
+        model_order = list(ew.get("model_order", []))
+        weights = list(ew.get("weights", []))
+        if not model_order or len(model_order) != len(weights):
+            raise ModelLoadError(
+                "ensemble_weights.json is malformed (model_order/weights length "
+                f"mismatch: {len(model_order)} vs {len(weights)}) at {path}"
+            )
+        model_order = list(ew.get("model_order", []))
+        weights = list(ew.get("weights", []))
+        if not model_order or len(model_order) != len(weights):
+            raise ModelLoadError(
+                "ensemble_weights.json is malformed (model_order/weights length "
+                f"mismatch: {len(model_order)} vs {len(weights)}) at {path}"
+            )
+        bad: list[tuple[str, float, float]] = []
+        for k in self.kept_members:
+            if k not in model_order:
+                continue
+            expected = float(weights[model_order.index(k)])
+            got = float(self.kept_weights.get(k, float("nan")))
+            if abs(got - expected) > _WEIGHTS_TOL:
+                bad.append((k, got, expected))
+        if bad:
+            manifest_vec = [round(self.kept_weights.get(k, float("nan")), 6) for k in model_order]
+            ens_vec = [round(float(w), 6) for w in weights]
+            lines = [
+                "ModelRegistry: serving_manifest weights do not match "
+                "ensemble_weights.json (no members were pruned, so they must "
+                "be identical).",
+                f"  serving_manifest weight_after_renormalisation : {manifest_vec}",
+                f"  ensemble_weights.json weights                 : {ens_vec}",
+                "Diverging members: "
+                + ", ".join(f"{k}: manifest={g:.6f} vs ensemble={e:.6f}" for k, g, e in bad),
+                "Fix: run scripts/repair_serving_manifest.py to rewrite the "
+                "manifest weights from ensemble_weights.json.",
+            ]
+            raise ModelLoadError("\n".join(lines))
+        return "pass"
+
+    def _check_imputation_against_preprocessing(self) -> None:
+        """Guard (b): manifest imputation_values vs preprocessing.json medians.
+
+        ``serving_manifest.json["imputation_values"]`` (Cell 9.8: ``{c: float(v)
+        for c, v in _prep_prod.medians_.items()}``) and
+        ``preprocessing.json["preprocessor"]["medians"]`` (Cell 8.2:
+        ``PRODUCTION_RUN["prep"].to_dict()["medians"]``) are serialised from the
+        SAME fitted preprocessor, so any difference means the manifest and the
+        preprocessing file came from different runs — the backend would impute
+        with one set of medians while the models were trained on another.
+
+        Raises ``ModelLoadError`` when any shared key differs by more than
+        ``_IMPUTATION_TOL``.  When neither file carries the values (no
+        ``imputation_values`` in the manifest or no ``medians`` in the
+        preprocessor dict), the check is skipped — that is reported by the
+        caller in the load report, not an error.  Returns the guard outcome
+        ("pass" | "skipped:<reason>") for the load report.
+        """
+        prep_dict = (self.preprocessing or {}).get("preprocessor") or {}
+        prep_medians = prep_dict.get("medians") if isinstance(prep_dict, dict) else None
+        if not self.imputation_values or not prep_medians:
+            return "skipped:imputation_values or preprocessing medians not present"
+        bad: list[tuple[str, float, float]] = []
+        for col, manifest_v in self.imputation_values.items():
+            if col not in prep_medians:
+                continue
+            prep_v = float(prep_medians[col])
+            if abs(float(manifest_v) - prep_v) > _IMPUTATION_TOL:
+                bad.append((col, float(manifest_v), prep_v))
+        if bad:
+            lines = [
+                "ModelRegistry: serving_manifest imputation_values disagree "
+                "with preprocessing.json preprocessor medians (>1e-9):",
+            ]
+            for col, m_v, p_v in bad:
+                lines.append(f"  - {col}: manifest={m_v!r} vs preprocessing={p_v!r}")
+            lines.append(
+                "The manifest and preprocessing.json were exported from "
+                "different preprocessor states. Re-run Notebook 3 Cell 9.8 "
+                "(and Cell 8.2) so both come from the same production run."
+            )
+            raise ModelLoadError("\n".join(lines))
+        return "pass"
+
+    @staticmethod
+    def _check_xgb_base_score_format(path: str) -> None:
+        """Guard (c): xgb_model.json written by xgboost>=3 must not be read by
+        xgboost 2.x.
+
+        xgboost 3.x serialises ``learner.learner_model_param.base_score`` as a
+        LIST (``"[35.1]"``-style); xgboost 2.x parses that string as 0.5 —
+        silently shifting every XGBoost prediction by ``base_score - 0.5`` on
+        the log scale.  When the file's base_score starts with ``[`` and the
+        installed xgboost major version is < 3, raise ``ModelLoadError``
+        pointing at ``scripts/fix_xgb_base_score.py``.  Returns the guard
+        outcome ("pass" | "skipped:<reason>") for the load report.
+        """
+        import json as _json
+
+        import xgboost as _xgb
+
+        try:
+            with open(path) as f:
+                model_json = _json.load(f)
+        except (OSError, _json.JSONDecodeError) as e:
+            raise ModelLoadError(
+                f"ModelRegistry: cannot read xgb model file {path!r} as JSON: {e}"
+            ) from e
+        base_score = (
+            model_json.get("learner", {}).get("learner_model_param", {}).get("base_score")
+        )
+        if base_score is None:
+            return "skipped:no learner_model_param.base_score in xgb_model.json"
+        if not str(base_score).lstrip().startswith("["):
+            return "pass (scalar base_score, xgboost 2.x-safe)"
+        major = int(str(_xgb.__version__).split(".")[0])
+        if major < 3:
+            raise ModelLoadError(
+                "ModelRegistry: xgb_model.json was written by xgboost>=3 (its "
+                "learner.learner_model_param.base_score is a list: "
+                f"{base_score!r}), but the installed xgboost is "
+                f"{_xgb.__version__} (<3). xgboost 2.x reads that value as 0.5 "
+                "and silently shifts EVERY XGBoost prediction by "
+                "(base_score - 0.5) on the log scale. Fix the file with "
+                "scripts/fix_xgb_base_score.py (or upgrade xgboost to >=3), "
+                "then reload."
+            )
+        return f"pass (list base_score under xgboost {_xgb.__version__} >=3)"
 
     def _build_preprocessor(self) -> None:
         """Reconstruct the fitted PipelinePreprocessor from preprocessing.json."""
@@ -390,4 +563,5 @@ class ModelRegistry:
             "load_time_s": self.load_time_s,
             "memory_mb": self.memory_mb,
             "missing_files": self.missing_files,
+            "startup_guards": self.guards,
         }

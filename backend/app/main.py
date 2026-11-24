@@ -260,6 +260,7 @@ async def lifespan(app: FastAPI):
                 explanation_service=bool(app.state.explanation_service),
                 comparables_service=bool(app.state.comparables_service),
                 amenity_proximity_service=bool(app.state.amenity_proximity_service),
+                startup_guards=model_reg.guards,
             )
         except ModelLoadError as e:
             logger.warning(

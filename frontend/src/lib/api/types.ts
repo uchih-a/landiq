@@ -197,6 +197,13 @@ export interface CountySummaryRow {
   water_body_distance_share: number | null;
   /** Null when the min_county_n threshold itself is unavailable. */
   n_below_min_county_n: boolean | null;
+  /** Part B3: suspect-listing count for this county (null when the scored
+   * frame is unavailable).  Powers the Locations tab's "share suspect"
+   * choropleth metric. */
+  n_suspect?: number | null;
+  /** Part B3: n_suspect / n_listings (null when n_listings is 0 or the
+   * scored frame is unavailable). */
+  share_suspect?: number | null;
 }
 
 /** P3b: canonical property type + corpus row count (dropdown data). */
@@ -557,6 +564,64 @@ export interface PriceDistributionResponse {
   /** P7b: the flag rule (percentile window) so the UI never re-types
    *  "1st–99th". */
   flag_definition: FlagDefinition | null;
+}
+
+// ---- Part B1: GET /api/v1/data/price-by-group ----
+
+/** One group's price-per-acre summary (prop_type value or size-band label key). */
+export interface PriceByGroupRow {
+  /** Canonical prop_type ("Land"/"Farm"/"Commercial") or a raw unmapped
+   * value, OR a size-band i18n key (``de.sizeBand.*``). */
+  group: string;
+  n: number;
+  /** True when n < MIN_GROUP_N — stats are null. */
+  insufficient: boolean;
+  median_listed_per_acre_ksh: number | null;
+  p10_listed_per_acre_ksh: number | null;
+  p90_listed_per_acre_ksh: number | null;
+  median_predicted_per_acre_ksh: number | null;
+}
+
+/** GET /api/v1/data/price-by-group response. */
+export interface PriceByGroupResponse {
+  group: 'prop_type' | 'size_band';
+  include_suspect: boolean;
+  n_usable: number;
+  /** MIN_GROUP_N from canonical.py (echoed so the UI never re-types it). */
+  min_group_n: number;
+  bands: PriceByGroupRow[];
+}
+
+// ---- Part B2: GET /api/v1/data/relationships ----
+
+/** Median listed price/acre for one log-size decile of the usable frame. */
+export interface RelationshipsDecilePoint {
+  decile: number;
+  n: number;
+  median_listed_per_acre_ksh: number | null;
+  median_size_acres: number | null;
+}
+
+/** One row of the deterministic uniform sample. */
+export interface RelationshipsSamplePoint {
+  listing_no: string | null;
+  size_acres: number;
+  listed_price_per_acre_ksh: number;
+  is_suspect: boolean;
+  data_quality_flag: boolean;
+}
+
+/** GET /api/v1/data/relationships response. */
+export interface RelationshipsResponse {
+  n_usable: number;
+  n_total: number;
+  /** Spearman rho over the FULL usable frame (null when <2 usable rows). */
+  spearman_rho: number | null;
+  deciles: RelationshipsDecilePoint[];
+  sample: RelationshipsSamplePoint[];
+  sample_n: number;
+  sample_seed: number;
+  min_group_n: number;
 }
 
 // ---- Places (B4) ----

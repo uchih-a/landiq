@@ -19,7 +19,7 @@
  */
 import '@testing-library/jest-dom/vitest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, act } from '@testing-library/react';
+import { render, screen, act, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 import '@/lib/i18n';
@@ -39,21 +39,27 @@ const fail = () => ({ data: undefined, isLoading: false, isError: true, refetch:
 vi.mock('@/lib/api/hooks', () => ({
   useCountySummary: vi.fn(),
   useCountyRowCounts: vi.fn(),
+  useCountyBoundaries: vi.fn(),
   useFeatureEvaluation: vi.fn(),
   useExplainability: vi.fn(),
   usePriceDistribution: vi.fn(),
+  usePriceByGroup: vi.fn(),
+  useRelationships: vi.fn(),
   useMeta: vi.fn(),
   useListingsScored: vi.fn(),
 }));
 
 import {
+  useCountyBoundaries,
   useCountyRowCounts,
   useCountySummary,
   useExplainability,
   useFeatureEvaluation,
   useListingsScored,
   useMeta,
+  usePriceByGroup,
   usePriceDistribution,
+  useRelationships,
 } from '@/lib/api/hooks';
 
 import DataExplorer from '../index';
@@ -210,11 +216,38 @@ function setupMocks(minCountyN: number | null = 25) {
     () => ok(MOCK_ROW_COUNTS),
   );
   vi.mocked(useCountySummary as unknown as ReturnType<typeof vi.fn>).mockImplementation(() => ok(MOCK_SUMMARY));
+  vi.mocked(useCountyBoundaries as unknown as ReturnType<typeof vi.fn>).mockImplementation(() =>
+    ok({ type: 'FeatureCollection', features: [] }),
+  );
   vi.mocked(useFeatureEvaluation as unknown as ReturnType<typeof vi.fn>).mockImplementation(
     () => ok(MOCK_FEATURE_EVAL),
   );
   vi.mocked(useExplainability as unknown as ReturnType<typeof vi.fn>).mockImplementation(() => ok(MOCK_EXPLAIN));
   vi.mocked(useListingsScored as unknown as ReturnType<typeof vi.fn>).mockImplementation(() => ok(MOCK_LISTINGS));
+  vi.mocked(usePriceByGroup as unknown as ReturnType<typeof vi.fn>).mockImplementation(() =>
+    ok({
+      group: 'prop_type',
+      include_suspect: false,
+      n_usable: 100,
+      min_group_n: 5,
+      bands: [
+        { group: 'Land', n: 50, insufficient: false, median_listed_per_acre_ksh: 1_000_000, p10_listed_per_acre_ksh: 500_000, p90_listed_per_acre_ksh: 2_000_000, median_predicted_per_acre_ksh: 900_000 },
+        { group: 'Farm', n: 3, insufficient: true },
+      ],
+    }),
+  );
+  vi.mocked(useRelationships as unknown as ReturnType<typeof vi.fn>).mockImplementation(() =>
+    ok({
+      n_usable: 100,
+      n_total: 120,
+      spearman_rho: -0.18,
+      deciles: [{ decile: 1, n: 10, median_listed_per_acre_ksh: 1_000_000, median_size_acres: 0.5 }],
+      sample: [{ listing_no: '1', size_acres: 1, listed_price_per_acre_ksh: 1_000_000, is_suspect: false, data_quality_flag: false }],
+      sample_n: 1,
+      sample_seed: 42,
+      min_group_n: 5,
+    }),
+  );
 }
 
 function renderExplorer(url = '/data-explorer') {
@@ -302,20 +335,23 @@ describe('P7b (c): tabs', () => {
     );
   });
 
-  it('the undesigned tabs are non-interactive but ?tab= restores the honest placeholder', () => {
+  it('all five tabs are designed and ?tab= restores the panel (B4)', () => {
     setupMocks(25);
     renderExplorer('/data-explorer?tab=prices');
-    expect(screen.getByText('Prices tab')).toBeInTheDocument();
-    // names the endpoint it would need
-    expect(
-      screen.getByText(/needs a new prices-by-group endpoint that does not exist yet/),
-    ).toBeInTheDocument();
-    // the Prices pill is disabled (non-interactive-looking)
-    expect(screen.getByRole('tab', { name: 'Prices' })).toBeDisabled();
+    // The Prices pill is now ENABLED (designed: true) and selected.
+    const pricesTab = screen.getByRole('tab', { name: 'Prices' });
+    expect(pricesTab).not.toBeDisabled();
+    expect(pricesTab).toHaveAttribute('aria-selected', 'true');
+    // The Prices panel renders (not the old "not designed yet" placeholder).
+    expect(screen.getByText('Prices by group')).toBeInTheDocument();
+    expect(screen.queryByText(/not designed yet/i)).not.toBeInTheDocument();
     // normaliseTab keeps unknown params on quality
     expect(normaliseTab('nonsense')).toBe('quality');
     expect(normaliseTab('table')).toBe('table');
     expect(TABS).toHaveLength(5);
+    // every tab is designed now (no disabled pills)
+    const designedCount = TABS.filter((tt) => tt.designed).length;
+    expect(designedCount).toBe(5);
   });
 });
 
@@ -462,5 +498,91 @@ describe('P7b (B/I): rowsForMissing', () => {
     expect(rows[1].feature).toBe('Log parcel size');
     // no severity anywhere (the typed 50% threshold is gone)
     expect(rows.every((r) => !('severe' in r))).toBe(true);
+  });
+});
+
+// ----------------------------------------------------------------------
+// A2 + B4: Table tab + arrow-key navigation across the enabled pills
+// ----------------------------------------------------------------------
+
+describe('A2: Table tab renders cleaned rows + Suspect data chip', () => {
+  it('renders rows from the mocked /listings/scored', () => {
+    setupMocks(25);
+    // Override useListingsScored with a richer page for the table view.
+    vi.mocked(useListingsScored as unknown as ReturnType<typeof vi.fn>).mockImplementation(() =>
+      ok({
+        pagination: { page: 1, page_size: 25, total_rows: 2, total_pages: 1, filters: {} },
+        listings: [
+          {
+            listing_url: 'u1', listing_no: '1001', title: 'Karen plot', location: 'Karen',
+            county: 'Nairobi', prop_type: 'Land', latitude: -1.3, longitude: 36.8,
+            price_ksh: 5_000_000, size_acres: 0.5,
+            listed_price_per_acre_ksh: 10_000_000, predicted_price_per_acre_ksh: 9_000_000,
+            low_price_per_acre_ksh: 5_400_000, high_price_per_acre_ksh: 13_500_000,
+            listed_over_predicted: 1.11, scored_by: 'oof', verdict: 'fair',
+            data_quality_flag: false, is_suspect: false, suspect_reason: null,
+          },
+          {
+            listing_url: 'u2', listing_no: '1002', title: 'Suspicious farm', location: 'Kajiado',
+            county: 'Kajiado', prop_type: 'Farm', latitude: -1.85, longitude: 36.78,
+            price_ksh: 1_000, size_acres: 1.0,
+            listed_price_per_acre_ksh: 1_000, predicted_price_per_acre_ksh: 50_000,
+            low_price_per_acre_ksh: 30_000, high_price_per_acre_ksh: 75_000,
+            listed_over_predicted: 0.02, scored_by: 'oof', verdict: 'underpriced',
+            data_quality_flag: true, is_suspect: true, suspect_reason: 'listed_far_below_model',
+          },
+        ],
+      }),
+    );
+    renderExplorer('/data-explorer?tab=table');
+    // Header copy says these are CLEANED modelling rows, not the raw scrape.
+    expect(screen.getByText('Cleaned modelling rows')).toBeInTheDocument();
+    // Both rows render.
+    expect(screen.getByText('Karen plot')).toBeInTheDocument();
+    expect(screen.getByText('Suspicious farm')).toBeInTheDocument();
+    // The suspect row shows a "Suspect data" chip — NOT a verdict chip.
+    expect(screen.getByText('Suspect data')).toBeInTheDocument();
+    // The non-suspect row shows a verdict chip ("Fair"), not "Suspect data".
+    // There is exactly one "Suspect data" chip (the suspect row only).
+    expect(screen.getAllByText('Suspect data')).toHaveLength(1);
+  });
+
+  it('shows the empty state when the query returns no rows', () => {
+    setupMocks(25);
+    vi.mocked(useListingsScored as unknown as ReturnType<typeof vi.fn>).mockImplementation(() =>
+      ok({ pagination: { page: 1, page_size: 25, total_rows: 0, total_pages: 1, filters: {} }, listings: [] }),
+    );
+    renderExplorer('/data-explorer?tab=table');
+    expect(screen.getByText('No listings match the current filters.')).toBeInTheDocument();
+  });
+});
+
+describe('B4: arrow-key navigation reaches every enabled tab pill', () => {
+  it('ArrowRight / ArrowLeft move focus across the five enabled pills', () => {
+    setupMocks(25);
+    renderExplorer();
+    // All five pills are enabled (designed: true).
+    const quality = screen.getByRole('tab', { name: 'Data quality' });
+    const prices = screen.getByRole('tab', { name: 'Prices' });
+    quality.focus();
+    expect(quality).toHaveFocus();
+    // ArrowRight: quality -> prices
+    fireEvent.keyDown(quality, { key: 'ArrowRight' });
+    expect(prices).toHaveFocus();
+    // ArrowLeft: prices -> quality (wraps the other way)
+    fireEvent.keyDown(prices, { key: 'ArrowLeft' });
+    expect(quality).toHaveFocus();
+  });
+
+  it('End jumps to the last pill, Home to the first', () => {
+    setupMocks(25);
+    renderExplorer();
+    const quality = screen.getByRole('tab', { name: 'Data quality' });
+    const table = screen.getByRole('tab', { name: 'Table' });
+    quality.focus();
+    fireEvent.keyDown(quality, { key: 'End' });
+    expect(table).toHaveFocus();
+    fireEvent.keyDown(table, { key: 'Home' });
+    expect(quality).toHaveFocus();
   });
 });

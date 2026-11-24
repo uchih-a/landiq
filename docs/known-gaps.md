@@ -1949,3 +1949,48 @@ default Deal Finder view hides them (``hideDataErrors`` defaults to true).
    — those rows are already covered by ``data_quality_flag`` and the
    usable-frame filter.  If a NaN-ratio row should be suspect, say so and
    extend ``compute_suspect_columns``.
+
+## UI build round — Data Explorer tabs + rail buttons
+
+1. **Table tab shows CLEANED modelling rows, not the raw scrape.** The raw
+   pre-cleaning dataset is not served anywhere the backend loads
+   (`listings_scored.parquet` holds only the usable modelling rows). The
+   Table tab header copy says so.  No raw-scrape endpoint exists and none
+   is planned — the cleaning steps are documented on `/meta`.
+
+2. **Price-by-group `prop_type` view: rows with a NaN prop_type are absent
+   from every group.** The CSV fixture carries NaN prop_type for most rows
+   (the canonical Land/Farm/Commercial mapping is derived in Notebook 1
+   cells 60-100, not in the raw scrape).  The real artifacts have every
+   row mapped to a canonical type, so this is a fixture-only gap.  The
+   size_band view does not have this gap — every usable row has a finite
+   size, so the sum of band n equals the full usable count.
+
+3. **Relationships scatter is a sample of 1500 rows, not the full frame.**
+   The backend serves a deterministic uniform random sample
+   (`RELATIONSHIPS_SAMPLE_N = 1500`, seeded `RELATIONSHIPS_SAMPLE_SEED =
+   42` in `canonical.py`) — never top-N or first-N.  The caption states
+   the sample size and the usable total.  Two callers see the same
+   points; the sample's suspect share is within 3pp of the population.
+
+4. **Locations choropleth: counties below `MIN_GROUP_N` are hatched and
+   excluded from the colour ramp.** The `/counties/summary` endpoint
+   carries `n_suspect` + `share_suspect` per county (computed at serve
+   time from `listings_scored` via the suspect gate); the metric selector
+   offers median listed KSh/acre, listing count, and share suspect.
+   County boundaries (`/counties/boundaries`) require
+   `kenya_counties_simplified.geojson` — run
+   `scripts/download_county_boundaries.py` if the map renders the
+   no-boundaries empty state.
+
+5. **The `dist_to_*` feature columns are NOT in the Relationships or
+   Table views.** `listings_scored.parquet` (Cell 9.6) carries only
+   `ID_COLUMNS` + price columns, not the feature columns — distance
+   features are recomputed at prediction time from lat/lon, not stored.
+   The Relationships tab plots size vs price (both present); a
+   distance-vs-price view would need a recompute endpoint and is not
+   built here.
+
+6. **Rail Fullscreen button is disabled when `document.fullscreenEnabled`
+   is false** (e.g. inside an iframe that blocks fullscreen).  The button
+   carries a title explaining why; no fallback action is offered.

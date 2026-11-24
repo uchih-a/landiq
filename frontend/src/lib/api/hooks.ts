@@ -64,7 +64,9 @@ import type {
   PredictOptionsResponse,
   PredictRequest,
   PredictResponse,
+  PriceByGroupResponse,
   PriceDistributionResponse,
+  RelationshipsResponse,
 } from './types';
 
 // ----------------------------------------------------------------------
@@ -314,6 +316,37 @@ export function usePriceDistribution(): ApiQueryResult<PriceDistributionResponse
   return useApiQuery<PriceDistributionResponse>({
     queryKey: ['data', 'price-distribution'],
     path: '/data/price-distribution',
+    staleTime: 5 * 60_000,
+  });
+}
+
+/**
+ * GET /data/price-by-group (Part B1) — per-group (prop_type or size_band)
+ * price-per-acre summary: n, median, p10, p90 of listed price/acre + median
+ * predicted.  Groups with n < MIN_GROUP_N carry insufficient=true + null
+ * stats.  Suspects are excluded unless include_suspect=true.
+ */
+export function usePriceByGroup(
+  group: 'prop_type' | 'size_band',
+  include_suspect: boolean = false,
+): ApiQueryResult<PriceByGroupResponse> {
+  const path = `/data/price-by-group?group=${group}&include_suspect=${include_suspect ? 'true' : 'false'}`;
+  return useApiQuery<PriceByGroupResponse>({
+    queryKey: ['data', 'price-by-group', group, include_suspect],
+    path,
+    staleTime: 5 * 60_000,
+  });
+}
+
+/**
+ * GET /data/relationships (Part B2) — size_acres vs listed price/acre:
+ * Spearman rho over the full usable frame, median price/acre per log-size
+ * decile, and a deterministic uniform sample of RELATIONSHIPS_SAMPLE_N rows.
+ */
+export function useRelationships(): ApiQueryResult<RelationshipsResponse> {
+  return useApiQuery<RelationshipsResponse>({
+    queryKey: ['data', 'relationships'],
+    path: '/data/relationships',
     staleTime: 5 * 60_000,
   });
 }
