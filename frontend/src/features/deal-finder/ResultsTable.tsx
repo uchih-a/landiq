@@ -25,7 +25,7 @@ import { getErrorState } from '@/lib/api/hooks';
 import type { ListingsScoredRow } from '@/lib/api/types';
 import { formatCompactMoney } from '@/lib/currency/format';
 import { useLocale } from '@/lib/i18n/useLocale';
-import { verdictStyle } from './verdict-styles';
+import { SUSPECT_STYLE, suspectReasonLabelKey, verdictStyle } from './verdict-styles';
 
 interface Props {
   isLoading: boolean;
@@ -267,17 +267,37 @@ export function ResultsTable({
                     </td>
                     {/* Verdict */}
                     <td className="py-3.5 px-3 whitespace-nowrap">
-                      <span
-                        className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold ${vStyle.chip}`}
-                      >
+                      {r.is_suspect ? (
+                        // Part B: suspect rows render a grey "Suspect data"
+                        // chip (tooltip = reason) instead of the verdict chip,
+                        // and "—" instead of the % — the deal signal is
+                        // unreliable when listed/predicted is implausible.
                         <span
-                          className="w-1.5 h-1.5 rounded-full"
-                          style={{ backgroundColor: vStyle.hex }}
-                          aria-hidden="true"
-                        />
-                        {pctSign}
-                        {pct}% {t(verdictShortKey(r.verdict))}
-                      </span>
+                          className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold ${SUSPECT_STYLE.chip}`}
+                          title={t('deals.suspectChipTitle', {
+                            reason: t(suspectReasonLabelKey(r.suspect_reason)),
+                          })}
+                        >
+                          <span
+                            className="w-1.5 h-1.5 rounded-full"
+                            style={{ backgroundColor: SUSPECT_STYLE.hex }}
+                            aria-hidden="true"
+                          />
+                          {t('deals.suspectData')}
+                        </span>
+                      ) : (
+                        <span
+                          className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold ${vStyle.chip}`}
+                        >
+                          <span
+                            className="w-1.5 h-1.5 rounded-full"
+                            style={{ backgroundColor: vStyle.hex }}
+                            aria-hidden="true"
+                          />
+                          {pctSign}
+                          {pct}% {t(verdictShortKey(r.verdict))}
+                        </span>
+                      )}
                     </td>
                     {/* Notice */}
                     <td className="py-3.5 px-3 text-center">

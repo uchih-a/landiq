@@ -1885,3 +1885,112 @@ is collected here so the next maintainer knows what was approximated.
         view too (product decision).
      8. The four undesigned Data Explorer tabs (#162) — each needs a
         design + its own endpoint decision before building.
+
+## Part B — Suspect-listing gate (2026-11-19)
+
+A serve-time data-quality gate that keeps listings with implausible
+listed-vs-predicted ratios out of the Deal Finder's deal signal.  Added in
+response to the Karen-at-KSh-100K/acre case the global 1st–99th percentile
+``data_quality_flag`` missed (a global trim cannot see a listing that is
+locally absurd but globally in-range).
+
+**Gate definition** (``backend/app/schemas/canonical.py``):
+
+- ``SUSPECT_RATIO_LOW = 0.05`` — listed per-acre price < 5 % of the model's
+  location-aware prediction → ``suspect_reason = "listed_far_below_model"``.
+- ``SUSPECT_RATIO_HIGH = 20.0`` — listed > 20× predicted →
+  ``suspect_reason = "listed_far_above_model"``.
+- A non-finite or non-positive ``size_acres`` is ALSO suspect
+  (``suspect_reason = "non_finite_size"``) — those rows produced
+  ``price_per_acre = inf`` before the A1 size fix.
+
+**Where it runs:** ``backend/app/services/suspect_gate.py`` derives
+``is_suspect`` + ``suspect_reason`` from the existing
+``listed_over_predicted`` and ``size_acres`` columns at serve time.  It is
+NEVER written to ``artifacts/`` (no retrain, no artifact edit).  The
+``/listings/scored`` and ``/listings/scored/export.csv`` endpoints gained an
+``is_suspect`` query param (same true/false/absent pattern as
+``data_quality_flag``); the CSV gained ``is_suspect`` + ``suspect_reason``
+columns.  ``ListingsScoredRow`` gained ``is_suspect: bool`` and
+``suspect_reason: str | None``.  The verdict field and its 3-value enum are
+unchanged.
+
+**Corpus counts:** the overview ``VerdictsBlock`` now reports ``n_suspect``
+separately and EXCLUDES suspects from the underpriced/fair/overpriced counts
+(``n_unknown`` is rebalanced so the four counts still sum to ``n_listings``).
+
+**Frontend:** ``ResultsTable`` and ``ListingDetailPanel`` render a grey
+"Suspect data" chip (tooltip = reason) instead of the verdict chip and "—"
+instead of the % / "asking is N% below the range" when ``is_suspect``.  The
+"Hide possible data errors" toggle now also hides suspect rows, and the
+default Deal Finder view hides them (``hideDataErrors`` defaults to true).
+
+**Open items / known limits:**
+
+1. The gate is a simple ratio band on ``listed_over_predicted``.  It does
+   not know about parcel size tiers, so a genuinely cheap large ranch
+   (e.g. 110468626 — 4 000 acres at KSh 250k/acre) can read as
+   ``listed_far_below_model`` when the model baseline is a global/county
+   median that ignores size.  The real size-aware model prediction (Cell
+   9.6) would not flag it; this is a property of the baseline, not the
+   gate.  Revisit if false-suspect noise on large parcels becomes common.
+2. ``is_suspect`` is computed per-request from the cached
+   ``listings_scored_df`` (a copy is made each serve).  At the dataset's
+   current size (~6k rows) this is microseconds; if the frame grows 100×,
+   cache the columns on the registry alongside the frame.
+3. The Part B tests use a fixture ``listings_scored.parquet`` built from
+   the real CSV with a global-median ``predicted`` heuristic
+   (``backend/tests/fixtures/listings_scored_fixture.py``), because the
+   real model artifacts were not shipped and the hard constraints forbid a
+   retrain.  The gate LOGIC is identical whether the predicted comes from
+   the real model or this baseline; the specific rows flagged differ.
+   Swap the fixture for the real parquet once Notebook 3 is rerun.
+4. NaN ``listed_over_predicted`` (no prediction) is treated as NOT suspect
+   — those rows are already covered by ``data_quality_flag`` and the
+   usable-frame filter.  If a NaN-ratio row should be suspect, say so and
+   extend ``compute_suspect_columns``.
+
+## UI build round — Data Explorer tabs + rail buttons
+
+1. **Table tab shows CLEANED modelling rows, not the raw scrape.** The raw
+   pre-cleaning dataset is not served anywhere the backend loads
+   (`listings_scored.parquet` holds only the usable modelling rows). The
+   Table tab header copy says so.  No raw-scrape endpoint exists and none
+   is planned — the cleaning steps are documented on `/meta`.
+
+2. **Price-by-group `prop_type` view: rows with a NaN prop_type are absent
+   from every group.** The CSV fixture carries NaN prop_type for most rows
+   (the canonical Land/Farm/Commercial mapping is derived in Notebook 1
+   cells 60-100, not in the raw scrape).  The real artifacts have every
+   row mapped to a canonical type, so this is a fixture-only gap.  The
+   size_band view does not have this gap — every usable row has a finite
+   size, so the sum of band n equals the full usable count.
+
+3. **Relationships scatter is a sample of 1500 rows, not the full frame.**
+   The backend serves a deterministic uniform random sample
+   (`RELATIONSHIPS_SAMPLE_N = 1500`, seeded `RELATIONSHIPS_SAMPLE_SEED =
+   42` in `canonical.py`) — never top-N or first-N.  The caption states
+   the sample size and the usable total.  Two callers see the same
+   points; the sample's suspect share is within 3pp of the population.
+
+4. **Locations choropleth: counties below `MIN_GROUP_N` are hatched and
+   excluded from the colour ramp.** The `/counties/summary` endpoint
+   carries `n_suspect` + `share_suspect` per county (computed at serve
+   time from `listings_scored` via the suspect gate); the metric selector
+   offers median listed KSh/acre, listing count, and share suspect.
+   County boundaries (`/counties/boundaries`) require
+   `kenya_counties_simplified.geojson` — run
+   `scripts/download_county_boundaries.py` if the map renders the
+   no-boundaries empty state.
+
+5. **The `dist_to_*` feature columns are NOT in the Relationships or
+   Table views.** `listings_scored.parquet` (Cell 9.6) carries only
+   `ID_COLUMNS` + price columns, not the feature columns — distance
+   features are recomputed at prediction time from lat/lon, not stored.
+   The Relationships tab plots size vs price (both present); a
+   distance-vs-price view would need a recompute endpoint and is not
+   built here.
+
+6. **Rail Fullscreen button is disabled when `document.fullscreenEnabled`
+   is false** (e.g. inside an iframe that blocks fullscreen).  The button
+   carries a title explaining why; no fallback action is offered.

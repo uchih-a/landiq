@@ -60,8 +60,12 @@ export default function DealFinder() {
     const v = searchParams.get('verdict');
     return v === 'underpriced' || v === 'fair' || v === 'overpriced' ? v : null;
   });  
-  const [showFlaggedOnly, setShowFlaggedOnly] = useState(() => searchParams.get('flagged') === 'true');  
-  const [hideDataErrors, setHideDataErrors] = useState(false);
+  const [showFlaggedOnly, setShowFlaggedOnly] = useState(() => searchParams.get('flagged') === 'true');
+  // Part B: the "Hide possible data errors" toggle now also hides suspect
+  // rows (listed_over_predicted outside [0.05, 20.0] or non-finite size).
+  // The default Deal Finder view HIDES them so implausible listings never
+  // surface as deals on first load.
+  const [hideDataErrors, setHideDataErrors] = useState(true);
   const [nearAmenity, setNearAmenity] = useState<string | null>(() => {
     const v = searchParams.get('amenity');
     return v === 'school' || v === 'hospital' || v === 'tarmac_road' ? v : null;
@@ -117,6 +121,8 @@ export default function DealFinder() {
       county: county === ALL_VALUE ? undefined : county,
       prop_type: propType === ALL_VALUE ? undefined : propType,
       data_quality_flag: showFlaggedOnly ? true : hideDataErrors ? false : undefined,
+      // Part B: the hide-data-errors toggle also hides suspect rows.
+      is_suspect: hideDataErrors ? false : undefined,
       near_amenity: (nearAmenity as 'school' | 'hospital' | 'tarmac_road' | undefined) ?? undefined,
       radius_km: nearAmenity ? (amenityRadius as 1 | 3 | 5) : undefined,
       sort: sortKey as ListingsScoredFilters['sort'],
@@ -183,7 +189,7 @@ export default function DealFinder() {
     setNearAmenity(null);
     setAmenityRadius(3);
     setShowFlaggedOnly(false);
-    setHideDataErrors(false);
+    setHideDataErrors(true); // Part B: default view hides suspect + flagged rows
     setSortKey('listed_over_predicted');
     setSortAsc(true);
     resetPage();

@@ -197,6 +197,13 @@ export interface CountySummaryRow {
   water_body_distance_share: number | null;
   /** Null when the min_county_n threshold itself is unavailable. */
   n_below_min_county_n: boolean | null;
+  /** Part B3: suspect-listing count for this county (null when the scored
+   * frame is unavailable).  Powers the Locations tab's "share suspect"
+   * choropleth metric. */
+  n_suspect?: number | null;
+  /** Part B3: n_suspect / n_listings (null when n_listings is 0 or the
+   * scored frame is unavailable). */
+  share_suspect?: number | null;
 }
 
 /** P3b: canonical property type + corpus row count (dropdown data). */
@@ -318,6 +325,13 @@ export interface ListingsScoredRow {
   scored_by: string;
   verdict: string;
   data_quality_flag: boolean;
+  /** Part B: suspect-listing gate (true when listed_over_predicted is
+   * outside [0.05, 20.0] or size is non-finite). Suspects are excluded
+   * from deal verdicts and the corpus counts. */
+  is_suspect?: boolean;
+  /** One of 'listed_far_below_model' | 'listed_far_above_model' |
+   * 'non_finite_size' | null. */
+  suspect_reason?: string | null;
 }
 
 export interface ListingsScoredResponse {
@@ -552,6 +566,64 @@ export interface PriceDistributionResponse {
   flag_definition: FlagDefinition | null;
 }
 
+// ---- Part B1: GET /api/v1/data/price-by-group ----
+
+/** One group's price-per-acre summary (prop_type value or size-band label key). */
+export interface PriceByGroupRow {
+  /** Canonical prop_type ("Land"/"Farm"/"Commercial") or a raw unmapped
+   * value, OR a size-band i18n key (``de.sizeBand.*``). */
+  group: string;
+  n: number;
+  /** True when n < MIN_GROUP_N — stats are null. */
+  insufficient: boolean;
+  median_listed_per_acre_ksh: number | null;
+  p10_listed_per_acre_ksh: number | null;
+  p90_listed_per_acre_ksh: number | null;
+  median_predicted_per_acre_ksh: number | null;
+}
+
+/** GET /api/v1/data/price-by-group response. */
+export interface PriceByGroupResponse {
+  group: 'prop_type' | 'size_band';
+  include_suspect: boolean;
+  n_usable: number;
+  /** MIN_GROUP_N from canonical.py (echoed so the UI never re-types it). */
+  min_group_n: number;
+  bands: PriceByGroupRow[];
+}
+
+// ---- Part B2: GET /api/v1/data/relationships ----
+
+/** Median listed price/acre for one log-size decile of the usable frame. */
+export interface RelationshipsDecilePoint {
+  decile: number;
+  n: number;
+  median_listed_per_acre_ksh: number | null;
+  median_size_acres: number | null;
+}
+
+/** One row of the deterministic uniform sample. */
+export interface RelationshipsSamplePoint {
+  listing_no: string | null;
+  size_acres: number;
+  listed_price_per_acre_ksh: number;
+  is_suspect: boolean;
+  data_quality_flag: boolean;
+}
+
+/** GET /api/v1/data/relationships response. */
+export interface RelationshipsResponse {
+  n_usable: number;
+  n_total: number;
+  /** Spearman rho over the FULL usable frame (null when <2 usable rows). */
+  spearman_rho: number | null;
+  deciles: RelationshipsDecilePoint[];
+  sample: RelationshipsSamplePoint[];
+  sample_n: number;
+  sample_seed: number;
+  min_group_n: number;
+}
+
 // ---- Places (B4) ----
 
 export interface PlaceSearchResult {
@@ -650,6 +722,9 @@ export interface ListingsScoredFilters {
   verdict?: VerdictFilter;
   scored_by?: ScoredByFilter;
   data_quality_flag?: boolean;
+  /** Part B suspect-listing gate: true = only suspect rows, false = only
+   * non-suspect rows, undefined = both. */
+  is_suspect?: boolean;
   near_amenity?: NearAmenityFilter;
   radius_km?: AmenityRadiusKm;
   sort?: ListingsSortKey;
@@ -773,6 +848,9 @@ export interface OverviewVerdictsBlock {
   fair_share: number | null;
   overpriced_share: number | null;
   n_listings: number;
+  /** Part B: suspect count, reported separately and excluded from the
+   * underpriced/fair/overpriced counts above. */
+  n_suspect?: number;
 }
 
 export interface OverviewPropertyTypeStat {

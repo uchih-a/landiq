@@ -196,7 +196,13 @@ def _totals_block(df: pd.DataFrame, min_county_n: int) -> TotalsBlock:
 
 def _verdicts_block(df: pd.DataFrame) -> VerdictsBlock:
     """Counts + shares of the stored verdict column.  Never re-derives
-    thresholds — reads the column the model wrote."""
+    thresholds — reads the column the model wrote.
+
+    Part B: suspect rows (``is_suspect`` column, derived at serve time by
+    ``app.services.suspect_gate.compute_suspect_columns``) are reported
+    separately as ``n_suspect`` and EXCLUDED from the underpriced/fair/
+    overpriced counts.  ``n_unknown`` is then ``n_listings - u - f - o -
+    n_suspect`` so the four counts still sum to ``n_listings``."""
     if len(df) == 0:
         return VerdictsBlock(
             underpriced=0,
@@ -207,14 +213,25 @@ def _verdicts_block(df: pd.DataFrame) -> VerdictsBlock:
             fair_share=None,
             overpriced_share=None,
             n_listings=0,
+            n_suspect=0,
         )
-    counts = df["verdict"].fillna("(unknown)").value_counts()
+    n = int(len(df))
+    if "is_suspect" in df.columns:
+        suspect_mask = df["is_suspect"].fillna(False).astype(bool)
+    else:
+        suspect_mask = pd.Series([False] * n, index=df.index)
+    n_suspect = int(suspect_mask.sum())
+
+    # Verdict counts EXCLUDE suspects (the deal signal is unreliable for
+    # rows whose listed/predicted ratio is implausible).
+    clean = df.loc[~suspect_mask]
+    counts = clean["verdict"].fillna("(unknown)").value_counts()
     u = int(counts.get("underpriced", 0))
     f = int(counts.get("fair", 0))
     o = int(counts.get("overpriced", 0))
-    known = u + f + o
-    n_unknown = int(len(df) - known)
-    n = int(len(df))
+    n_unknown = n - u - f - o - n_suspect
+    if n_unknown < 0:
+        n_unknown = 0
     return VerdictsBlock(
         underpriced=u,
         fair=f,
@@ -224,6 +241,7 @@ def _verdicts_block(df: pd.DataFrame) -> VerdictsBlock:
         fair_share=round(f / n, 4) if n else None,
         overpriced_share=round(o / n, 4) if n else None,
         n_listings=n,
+        n_suspect=n_suspect,
     )
 
 
@@ -601,6 +619,7 @@ def compute_overview_summary(
                 fair_share=None,
                 overpriced_share=None,
                 n_listings=0,
+                n_suspect=0,
             ),
             by_property_type=ByPropertyTypeBlock(
                 types=[

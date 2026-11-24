@@ -389,6 +389,24 @@ class ListingsScoredRow(BaseModel):
             "development target's 1st-99th percentile window (Cell 9.6)."
         ),
     )
+    is_suspect: bool = Field(
+        False,
+        description=(
+            "Part B suspect-listing gate (computed at serve time, never "
+            "written to artifacts).  True when listed_over_predicted falls "
+            "outside [SUSPECT_RATIO_LOW, SUSPECT_RATIO_HIGH] or size_acres "
+            "is non-finite / non-positive.  Suspects are excluded from the "
+            "underpriced/fair/overpriced corpus counts and reported "
+            "separately as n_suspect."
+        ),
+    )
+    suspect_reason: str | None = Field(
+        None,
+        description=(
+            "One of 'listed_far_below_model', 'listed_far_above_model', "
+            "'non_finite_size', or null when the row is not suspect."
+        ),
+    )
 
 
 class ListingsScoredResponse(BaseModel):

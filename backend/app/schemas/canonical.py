@@ -108,6 +108,62 @@ INTERVAL_METHOD: str = "multiplicative split-conformal"
 FLAG_LOWER_PCT: int = 1
 FLAG_UPPER_PCT: int = 99
 
+#: Suspect-listing gate (Part B).  A listing is "suspect" when its
+#: ``listed_over_predicted`` ratio falls outside this band — i.e. the
+#: listed per-acre price is implausible relative to the model's own
+#: location-aware estimate.  The gate is computed at serve time from the
+#: existing ``listed_over_predicted`` column (Cell 9.6) and is NEVER
+#: written to the artifacts (no retrain, no artifact edit).
+#:
+#: - ``SUSPECT_RATIO_LOW`` (0.05): listed < 5 % of predicted -> the listing
+#:   is almost certainly a per-acre price recorded as a total, a truncated
+#:   size, or a scraping error (e.g. Karen at KSh 100K/acre when the model
+#:   says ~KSh 2M/acre).  ``suspect_reason = "listed_far_below_model"``.
+#: - ``SUSPECT_RATIO_HIGH`` (20.0): listed > 20x predicted -> the listing
+#:   is almost certainly a unit error or a typo.  ``suspect_reason =
+#:   "listed_far_above_model"``.
+#: - A non-finite or non-positive ``size_acres`` is ALSO suspect
+#:   (``suspect_reason = "non_finite_size"``) — those rows produced
+#:   ``price_per_acre = inf`` before the A1 fix and still must not surface
+#:   as "deals".
+#:
+#: The verdict field and its 3-value enum are unchanged; suspects are
+#: reported separately (``n_suspect``) and excluded from the
+#: underpriced/fair/overpriced corpus counts.
+SUSPECT_RATIO_LOW: float = 0.05
+SUSPECT_RATIO_HIGH: float = 20.0
+
+#: Minimum group size for the Data Explorer's price-by-group + choropleth
+#: aggregates (Part B).  A prop_type / size-band / county with fewer than
+#: this many usable listings returns ``null`` stats and ``insufficient=True``
+#: rather than a noisy median built on two or three rows.  Served to the
+#: frontend via the response fields so the UI never re-types the threshold.
+MIN_GROUP_N: int = 5
+
+#: Size bands (acres) for the ``group=size_band`` price-by-group view.  The
+#: edges are a presentation choice (the breaks match the model's size
+#: intuition: sub-quarter-acre plots, smallholdings up to 5 ac, mid-size
+#: farms up to 20 ac, large ranches above).  ``SIZE_BAND_LABELS`` are the
+#: i18n keys the frontend renders — kept here so the bands and their labels
+#: stay in sync (the frontend only maps index -> label key).
+SIZE_BANDS_ACRES: list[float] = [0.0, 0.25, 1.0, 5.0, 20.0, float("inf")]
+SIZE_BAND_LABELS: list[str] = [
+    "de.sizeBand.under0_25",
+    "de.sizeBand.0_25to1",
+    "de.sizeBand.1to5",
+    "de.sizeBand.5to20",
+    "de.sizeBand.over20",
+]
+
+#: Sample size + seed for the Data Explorer "Relationships" scatter (Part B).
+#: A DETERMINISTIC uniform random sample (``np.random.default_rng(seed)``
+#: permutation, NOT top-N or first-N) of the usable frame, so two callers
+#: see the same points and the scatter is reproducible across deploys.  The
+#: seed is a backend constant (not a request param) so a caller cannot
+#: cherry-pick a flattering sample.
+RELATIONSHIPS_SAMPLE_N: int = 1500
+RELATIONSHIPS_SAMPLE_SEED: int = 42
+
 #: Methodology copy served by ``/meta`` (P8b) — the ONE backend place
 #: that describes the pipeline in plain language.  Every claim below is
 #: verifiable in this repo:

@@ -125,12 +125,48 @@ async def county_summary(
         property_types = []
         unmapped = 0
 
+    # ---- Part B3: per-county suspect counts (best-effort).  The Locations
+    #      tab's "share suspect" choropleth metric needs n_suspect per
+    #      county.  The suspect gate is derived at serve time (never
+    #      persisted); when the scored frame is unavailable the fields stay
+    #      null (the UI renders "not available" rather than a 0 that implies
+    #      "no suspects").  The prop_type filter is NOT applied here — the
+    #      Locations tab shows the WHOLE county's suspect share, matching
+    #      the n_listings it already shows (also unfiltered on the CSV path).
+    suspect_by_county: dict[str, int] = {}
+    scored_for_suspect = getattr(app_exports, "listings_scored_df", None)
+    if scored_for_suspect is None:
+        # Best-effort load: a missing parquet leaves suspect fields null
+        # (the summary still serves from county_summary.csv).
+        try:
+            app_exports.require("listings_scored_df", "listings_scored.parquet")
+            scored_for_suspect = app_exports.listings_scored_df
+        except Exception:
+            scored_for_suspect = None
+    if scored_for_suspect is not None:
+        from app.services.suspect_gate import compute_suspect_columns
+
+        suspect_df = compute_suspect_columns(scored_for_suspect)
+        if "county" in suspect_df.columns and "is_suspect" in suspect_df.columns:
+            suspect_only = suspect_df[suspect_df["is_suspect"].fillna(False).astype(bool)]
+            if len(suspect_only) > 0:
+                counts = suspect_only.groupby("county").size()
+                suspect_by_county = {str(k): int(v) for k, v in counts.items()}
+
     # ---- min_county_n from the manifest config (P3b fix: no typed-10
     #      fallback masking a missing artifact — null + data_quality). ----
     min_county_n = min_county_n_from_manifest(app_exports.manifest)
     data_quality = "min_county_n_missing" if min_county_n is None else None
 
     # ---- Per-county rows: CSV path (unfiltered) or frame path (filtered). ----
+    def _suspect_fields(county_name: str, n_listings: int) -> dict:
+        """Attach n_suspect + share_suspect when the scored frame loaded."""
+        if scored_for_suspect is None:
+            return {"n_suspect": None, "share_suspect": None}
+        n_susp = int(suspect_by_county.get(county_name, 0))
+        share = (n_susp / n_listings) if n_listings > 0 else None
+        return {"n_suspect": n_susp, "share_suspect": share}
+
     if canonical is None:
         df = app_exports.require("county_summary_df", "county_summary.csv")
         rows = [
@@ -145,6 +181,7 @@ async def county_summary(
                 n_below_min_county_n=(
                     None if min_county_n is None else bool(r["n_below_min_county_n"])
                 ),
+                **_suspect_fields(str(r["county"]), int(r["n_listings"])),
             )
             for _, r in df.iterrows()
         ]
@@ -164,6 +201,7 @@ async def county_summary(
                 n_below_min_county_n=(
                     None if min_county_n is None else bool(r["n_below_min_county_n"])
                 ),
+                **_suspect_fields(str(r["county"]), int(r["n_listings"])),
             )
             for _, r in agg.iterrows()
         ]

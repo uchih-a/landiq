@@ -64,7 +64,9 @@ import type {
   PredictOptionsResponse,
   PredictRequest,
   PredictResponse,
+  PriceByGroupResponse,
   PriceDistributionResponse,
+  RelationshipsResponse,
 } from './types';
 
 // ----------------------------------------------------------------------
@@ -319,6 +321,37 @@ export function usePriceDistribution(): ApiQueryResult<PriceDistributionResponse
 }
 
 /**
+ * GET /data/price-by-group (Part B1) — per-group (prop_type or size_band)
+ * price-per-acre summary: n, median, p10, p90 of listed price/acre + median
+ * predicted.  Groups with n < MIN_GROUP_N carry insufficient=true + null
+ * stats.  Suspects are excluded unless include_suspect=true.
+ */
+export function usePriceByGroup(
+  group: 'prop_type' | 'size_band',
+  include_suspect: boolean = false,
+): ApiQueryResult<PriceByGroupResponse> {
+  const path = `/data/price-by-group?group=${group}&include_suspect=${include_suspect ? 'true' : 'false'}`;
+  return useApiQuery<PriceByGroupResponse>({
+    queryKey: ['data', 'price-by-group', group, include_suspect],
+    path,
+    staleTime: 5 * 60_000,
+  });
+}
+
+/**
+ * GET /data/relationships (Part B2) — size_acres vs listed price/acre:
+ * Spearman rho over the full usable frame, median price/acre per log-size
+ * decile, and a deterministic uniform sample of RELATIONSHIPS_SAMPLE_N rows.
+ */
+export function useRelationships(): ApiQueryResult<RelationshipsResponse> {
+  return useApiQuery<RelationshipsResponse>({
+    queryKey: ['data', 'relationships'],
+    path: '/data/relationships',
+    staleTime: 5 * 60_000,
+  });
+}
+
+/**
  * GET /overview/summary — the single read-only response that drives the
  * Overview page (O1).  Returns totals, verdicts, by-property-type /
  * by-size-band / by-distance-band breakdowns, log-linear trend,
@@ -513,6 +546,7 @@ export function buildListingsScoredQuery(filters: ListingsScoredFilters): string
   if (filters.scored_by) params.set('scored_by', filters.scored_by);
   if (filters.data_quality_flag != null)
     params.set('data_quality_flag', String(filters.data_quality_flag));
+  if (filters.is_suspect != null) params.set('is_suspect', String(filters.is_suspect));
   if (filters.near_amenity) params.set('near_amenity', filters.near_amenity);
   if (filters.radius_km != null) params.set('radius_km', String(filters.radius_km));
   if (filters.sort) params.set('sort', filters.sort);
@@ -586,6 +620,7 @@ export function buildListingsExportUrl(filters: ListingsScoredFilters): string {
   if (filters.scored_by) params.set('scored_by', filters.scored_by);
   if (filters.data_quality_flag != null)
     params.set('data_quality_flag', String(filters.data_quality_flag));
+  if (filters.is_suspect != null) params.set('is_suspect', String(filters.is_suspect));
   if (filters.near_amenity) params.set('near_amenity', filters.near_amenity);
   if (filters.radius_km != null) params.set('radius_km', String(filters.radius_km));
   if (filters.sort) params.set('sort', filters.sort);

@@ -90,6 +90,7 @@ from app.schemas.app_exports import (
     PaginationMeta,
 )
 from app.schemas.canonical import PROPERTY_TYPES
+from app.services.suspect_gate import compute_suspect_columns
 from app.schemas.listings_options import (
     ListingsOptionsResponse,
     NearbyListing,
@@ -175,6 +176,15 @@ async def listings_scored(
             "false = only clean rows; absent = both."
         ),
     ),
+    is_suspect: bool | None = Query(
+        None,
+        description=(
+            "Part B suspect-listing gate.  true = only suspect rows "
+            "(listed_over_predicted outside [0.05, 20.0] or non-finite "
+            "size); false = only non-suspect rows; absent = both.  Same "
+            "pattern as data_quality_flag."
+        ),
+    ),
     near_amenity: Literal["school", "hospital", "tarmac_road"] | None = Query(  # noqa: B008
         None,
         description=(
@@ -229,6 +239,8 @@ async def listings_scored(
 
     app_exports = request.app.state.app_exports
     df = app_exports.require("listings_scored_df", "listings_scored.parquet")
+    # Part B: derive is_suspect + suspect_reason at serve time (never persisted).
+    df = compute_suspect_columns(df)
 
     # ---- Validate the enum-like filters ----
     if verdict is not None and verdict not in {"underpriced", "fair", "overpriced"}:
@@ -329,6 +341,9 @@ async def listings_scored(
     if data_quality_flag is not None:
         filters["data_quality_flag"] = data_quality_flag
         mask &= df["data_quality_flag"] == data_quality_flag
+    if is_suspect is not None:
+        filters["is_suspect"] = is_suspect
+        mask &= df["is_suspect"].fillna(False).astype(bool) == is_suspect
 
     filtered = df[mask]
 
@@ -506,6 +521,9 @@ async def listings_scored_export(
     verdict: str | None = Query(None, description="underpriced / fair / overpriced"),
     scored_by: str | None = Query(None, description="oof / test"),
     data_quality_flag: bool | None = Query(None, description="true/false/absent"),
+    is_suspect: bool | None = Query(
+        None, description="Part B suspect gate: true/false/absent (same as /listings/scored)"
+    ),
     sort: str = Query("listed_over_predicted", description="Sort key"),
     order: str = Query(None, description="asc / desc (per-key default when absent)"),
 ) -> StreamingResponse:
@@ -523,6 +541,8 @@ async def listings_scored_export(
     """
     app_exports = request.app.state.app_exports
     df = app_exports.require("listings_scored_df", "listings_scored.parquet")
+    # Part B: derive is_suspect + suspect_reason at serve time (never persisted).
+    df = compute_suspect_columns(df)
 
     # ---- Reuse the same validation (422s on bad values). ----
     canonical_type: str | None = None
@@ -572,6 +592,8 @@ async def listings_scored_export(
         mask &= df["scored_by"] == scored_by
     if data_quality_flag is not None:
         mask &= df["data_quality_flag"] == data_quality_flag
+    if is_suspect is not None:
+        mask &= df["is_suspect"].fillna(False).astype(bool) == is_suspect
     filtered = df[mask]
 
     # ---- Sort (same semantics). ----
@@ -611,6 +633,8 @@ async def listings_scored_export(
             _csv_cell(r.get("verdict")),
             _csv_cell(r.get("scored_by")),
             "true" if bool(r.get("data_quality_flag")) else "false",
+            "true" if bool(r.get("is_suspect") or False) else "false",
+            _csv_cell(r.get("suspect_reason")),
         ]
 
     header = [
@@ -630,6 +654,8 @@ async def listings_scored_export(
         "verdict",
         "scored_by",
         "data_quality_flag",
+        "is_suspect",
+        "suspect_reason",
     ]
 
     def _iter_csv():
@@ -735,4 +761,6 @@ def _listings_row_from_series(r: pd.Series) -> ListingsScoredRow:
         scored_by=str(r["scored_by"]),
         verdict=str(r["verdict"]),
         data_quality_flag=bool(r["data_quality_flag"]),
+        is_suspect=bool(r.get("is_suspect", False) or False),
+        suspect_reason=_maybe(r.get("suspect_reason")),
     )

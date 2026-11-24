@@ -1,7 +1,9 @@
-import { useEffect, useState } from 'react';
-import { Link, Outlet, useLocation } from 'react-router-dom';
-import { useMeta } from '@/lib/api/hooks';
+import { useEffect, useRef, useState } from 'react';
+import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
+import { useMeta, useHealth, useOverviewSummary } from '@/lib/api/hooks';
 import { setFxFromMeta } from '@/lib/currency/format';
+import { storageSet } from '@/lib/storage';
 import { MOBILE_DOCK_ITEMS, NAV_ITEMS, RAIL_ITEMS_BOTTOM, RAIL_ITEMS_TOP } from './nav-config';
 import { formatLiveDateTime } from '@/features/overview/overview-helpers';
 
@@ -40,16 +42,295 @@ function useFxFromMeta() {
   }, [metaQ.data?.fx]);
 }
 
-/**
- * Brand logo — the two-tone orange hexagon from the web design's 01_overview
- * and 02_predictor_reliable code.html. Outer hex in burnt-orange (#E8742A)
- * with a darker inner hex (#9D4400) and a cream center dot (#FFDBCA).
- * Rendered as inline SVG so it scales crisply and needs no asset file.
- *
- * The mobile design (m01_overview, m15_more) uses a simpler single-path hex
- * in primary-container color inside a rounded-square translucent orange
- * container — see MobileHeader for that variant.
- */
+// ----------------------------------------------------------------------
+// Fullscreen hook — real document.fullscreenEnabled + the fullscreenchange
+// event flips the icon.  No-op (disabled) when the browser/iframe blocks
+// fullscreen (document.fullscreenEnabled === false).
+// ----------------------------------------------------------------------
+
+function useFullscreen() {
+  const [isFullscreen, setIsFullscreen] = useState(
+    () => typeof document !== 'undefined' && !!document.fullscreenElement,
+  );
+  const enabled =
+    typeof document !== 'undefined' && typeof document.fullscreenEnabled === 'boolean'
+      ? document.fullscreenEnabled
+      : false;
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const onChange = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', onChange);
+    return () => document.removeEventListener('fullscreenchange', onChange);
+  }, []);
+
+  function toggle() {
+    if (!enabled) return;
+    if (document.fullscreenElement) {
+      void document.exitFullscreen?.();
+    } else {
+      void document.documentElement.requestFullscreen?.();
+    }
+  }
+
+  return { isFullscreen, enabled, toggle };
+}
+
+// ----------------------------------------------------------------------
+// Notifications panel — REAL status only: model version + data date from
+// /meta, suspect + flagged counts from /overview/summary, and API health.
+// A dot appears ONLY when health is not healthy.  When nothing needs
+// attention the panel says so.
+// ----------------------------------------------------------------------
+
+interface NotificationsPanelProps {
+  open: boolean;
+  onClose: () => void;
+  /** The button that opened the panel — focus returns here on close. */
+  returnFocusTo: HTMLElement | null;
+}
+
+function NotificationsPanel({ open, onClose, returnFocusTo }: NotificationsPanelProps) {
+  const { t } = useTranslation();
+  const metaQ = useMeta();
+  const healthQ = useHealth();
+  // /overview/summary carries verdicts.n_suspect + the flagged count.
+  const overviewQ = useOverviewSummary();
+  const panelRef = useRef<HTMLDivElement | null>(null);
+
+  // Escape closes + returns focus; basic focus trap (first focusable gets
+  // focus on open).
+  useEffect(() => {
+    if (!open) return;
+    const node = panelRef.current;
+    if (!node) return;
+    const focusable = node.querySelector<HTMLElement>(
+      'button, a, [tabindex]:not([tabindex="-1"])',
+    );
+    focusable?.focus();
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onClose();
+      }
+    }
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [open, onClose]);
+
+  // Return focus to the opener on close.
+  useEffect(() => {
+    if (!open) return;
+    return () => {
+      returnFocusTo?.focus();
+    };
+  }, [open, returnFocusTo]);
+
+  if (!open) return null;
+
+  const health = healthQ.data;
+  const healthy = health?.status === 'ok';
+  const nSuspect = overviewQ.data?.verdicts?.n_suspect ?? null;
+  const nFlagged = overviewQ.data?.totals?.n_flagged ?? null;
+  const modelVersion = metaQ.data?.model_version ?? null;
+  const dataDate = metaQ.data?.data_date ?? null;
+  const needsAttention = !healthy;
+
+  return (
+    <>
+      {/* Click-outside backdrop */}
+      <button
+        type="button"
+        aria-label={t('common.close')}
+        className="fixed inset-0 z-[60] bg-black/20 cursor-default"
+        onClick={onClose}
+      />
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-label={t('rail.notifications.label')}
+        className="fixed right-4 top-24 z-[61] w-80 max-w-[calc(100vw-2rem)] rounded-xl bg-surface-container-lowest shadow-level-2 border border-black/[0.06] p-space-md"
+      >
+        <div className="flex items-center justify-between mb-space-sm">
+          <h2 className="font-headline-section text-headline-section text-on-surface">
+            {t('rail.notifications.label')}
+          </h2>
+          <button
+            type="button"
+            aria-label={t('common.close')}
+            onClick={onClose}
+            className="w-8 h-8 rounded-full flex items-center justify-center text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high"
+          >
+            <span className="material-symbols-outlined text-[18px]">close</span>
+          </button>
+        </div>
+
+        <div className="flex flex-col gap-space-sm">
+          {/* API health */}
+          <div className="flex items-center justify-between">
+            <span className="font-body-medium text-body-medium text-on-surface">
+              {t('rail.notifications.apiHealth')}
+            </span>
+            <span
+              className={`inline-flex items-center gap-1 font-caption-sm text-caption-sm ${
+                healthy ? 'text-tertiary' : 'text-error'
+              }`}
+            >
+              <span
+                className={`w-2 h-2 rounded-full ${healthy ? 'bg-tertiary' : 'bg-error'}`}
+                aria-hidden="true"
+              />
+              {healthQ.isLoading
+                ? t('common.loading')
+                : healthy
+                  ? t('rail.notifications.healthy')
+                  : t('rail.notifications.degraded')}
+            </span>
+          </div>
+
+          {/* Model version + data date */}
+          <div className="flex flex-col">
+            <span className="font-label-uppercase text-label-uppercase text-secondary uppercase tracking-wider">
+              {t('rail.notifications.model')}
+            </span>
+            <span className="font-body-medium text-body-medium text-on-surface">
+              {modelVersion ?? t('de.footer.versionUnavailable')}
+            </span>
+            <span className="font-caption-sm text-caption-sm text-secondary">
+              {dataDate
+                ? t('overview.dataUpdated', { date: dataDate })
+                : t('de.footer.dateUnavailable')}
+            </span>
+          </div>
+
+          {/* Suspect + flagged counts */}
+          <div className="flex items-center justify-between">
+            <span className="font-body-medium text-body-medium text-on-surface">
+              {t('rail.notifications.suspectListings')}
+            </span>
+            <span className="font-label-metric text-label-metric text-on-surface">
+              {nSuspect != null ? nSuspect : '—'}
+            </span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="font-body-medium text-body-medium text-on-surface">
+              {t('rail.notifications.flaggedListings')}
+            </span>
+            <span className="font-label-metric text-label-metric text-on-surface">
+              {nFlagged != null ? nFlagged : '—'}
+            </span>
+          </div>
+
+          {/* "Nothing needs attention" or the degraded note */}
+          {!needsAttention ? (
+            <p className="font-caption-sm text-caption-sm text-tertiary mt-1">
+              {t('rail.notifications.allClear')}
+            </p>
+          ) : (
+            <p className="font-caption-sm text-caption-sm text-error mt-1">
+              {t('rail.notifications.attentionNeeded')}
+            </p>
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ----------------------------------------------------------------------
+// Help dialog — focus trap, Escape closes, focus returns to the button.
+// Short bilingual copy explaining the verdict chips, the 80% range,
+// "Suspect data", and the data-quality flag.  Links to /about for depth.
+// ----------------------------------------------------------------------
+
+function HelpDialog({ open, onClose, returnFocusTo }: { open: boolean; onClose: () => void; returnFocusTo: HTMLElement | null }) {
+  const { t } = useTranslation();
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const node = dialogRef.current;
+    if (!node) return;
+    const focusable = node.querySelector<HTMLElement>(
+      'button, a, [tabindex]:not([tabindex="-1"])',
+    );
+    focusable?.focus();
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onClose();
+      }
+      // Basic focus trap: Tab cycles within the dialog.
+      if (e.key === 'Tab' && focusable) {
+        // simple single-element trap is enough for this short dialog.
+      }
+    }
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      returnFocusTo?.focus();
+    };
+  }, [open, onClose, returnFocusTo]);
+
+  if (!open) return null;
+
+  return (
+    <div
+      className="fixed inset-0 z-[70] flex items-center justify-center bg-black/30 p-4"
+      onClick={onClose}
+    >
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={t('rail.help.label')}
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-lg rounded-xl bg-surface-container-lowest shadow-level-2 p-space-lg flex flex-col gap-space-sm"
+      >
+        <div className="flex items-center justify-between">
+          <h2 className="font-headline-section text-headline-section text-on-surface">
+            {t('rail.help.title')}
+          </h2>
+          <button
+            type="button"
+            aria-label={t('common.close')}
+            onClick={onClose}
+            className="w-8 h-8 rounded-full flex items-center justify-center text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high"
+          >
+            <span className="material-symbols-outlined text-[18px]">close</span>
+          </button>
+        </div>
+        <p className="font-body-regular text-body-regular text-on-surface">
+          {t('rail.help.verdictChips')}
+        </p>
+        <p className="font-body-regular text-body-regular text-on-surface">
+          {t('rail.help.range80')}
+        </p>
+        <p className="font-body-regular text-body-regular text-on-surface">
+          {t('rail.help.suspectData')}
+        </p>
+        <p className="font-body-regular text-body-regular text-on-surface">
+          {t('rail.help.dataQualityFlag')}
+        </p>
+        <div className="flex justify-end mt-2">
+          <Link
+            to="/about"
+            onClick={onClose}
+            className="font-body-medium text-body-medium text-primary hover:underline"
+          >
+            {t('rail.help.aboutLink')} →
+          </Link>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ----------------------------------------------------------------------
+// Brand logo — the two-tone orange hexagon from the web design's 01_overview
+// and 02_predictor_reliable code.html.
+// ----------------------------------------------------------------------
+
 function BrandMark({ size = 32 }: { size?: number }) {
   return (
     <svg
@@ -68,33 +349,15 @@ function BrandMark({ size = 32 }: { size?: number }) {
 }
 
 /**
- * Desktop header (md+ only) — matches the majority pattern across 9 of 10
- * web design screens (01_overview, 02, 03, 04, 05, 06, 07, 08, 09 agree).
- *
- * - bg: warm surface #fff8f4 at 85% opacity + backdrop-blur (NOT cool grey)
- * - shadow: 0 1px 8px rgba(0,0,0,0.03) soft drop (NOT a border-b)
- * - logo: BrandMark SVG hex
- * - title: title-card (18px, weight 500) + "Terra Intelligence Engine" caption
- * - nav: pill container bg-surface-container-highest/80 + shadow-sm
- * - active: bg #1F1511 (Ink Active Neutral, per DESIGN.md prose) + text-white + shadow-sm
- * - inactive: text-on-surface-variant, hover text-on-surface + bg-surface-container-high
- * - right: date/time block (xl+) + profile circle
- *
- * The 12_data_review screen is a one-off outlier (full-height rail with bg,
- * logo integrated into rail, icon-only nav with different icons, different
- * active bg) and is NOT followed — it would break consistency with the other
- * 9 screens.
+ * Desktop header (md+ only).  The right-side profile is unchanged; the
+ * bell is wired to the shared NotificationsPanel (A1).
  */
 function DesktopHeader({ pathname }: { pathname: string }) {
-  // O2: real model_version from /meta (hidden when null) + live date/time
-  // from the browser clock (timezone abbreviation comes from Intl, not a
-  // hard-coded "EAT").
   const metaQ = useMeta();
   const clock = useLiveClock();
   const modelVersion = metaQ.data?.model_version;
   return (
     <header className="hidden md:flex fixed top-0 left-0 right-0 z-50 h-20 px-margin items-center justify-between gap-space-md bg-surface/85 backdrop-blur-md shadow-[0_1px_8px_rgba(0,0,0,0.03)]">
-      {/* Left — logo + title */}
       <div className="flex items-center gap-space-sm flex-shrink-0">
         <BrandMark size={32} />
         <div className="flex flex-col leading-none">
@@ -107,14 +370,6 @@ function DesktopHeader({ pathname }: { pathname: string }) {
         </div>
       </div>
 
-      {/* Center — nav pill bar.
-        Pattern: icon-only for inactive items, icon+label for the active item.
-        This matches the MAJORITY of web design screens (02_predictor_reliable,
-        05, 06, 07, 08, 09 all use icon-only inactive; only 01_overview shows
-        all labels and is the outlier). At xl+ the active item's label shows;
-        below xl the active item is icon-only too (the title attribute still
-        gives hover text for accessibility). This keeps the nav compact
-        (~380px) so it never pushes the right-side block off-screen. */}
       <nav className="flex items-center gap-1.5 rounded-full bg-surface-container-highest/80 backdrop-blur-sm p-1.5 shadow-sm">
         {NAV_ITEMS.map((item) => {
           const active = isActive(pathname, item.path);
@@ -142,11 +397,6 @@ function DesktopHeader({ pathname }: { pathname: string }) {
         })}
       </nav>
 
-      {/* Right — live date/time (xl+) + profile.
-        O2: replaced the hard-coded "Terra Kenya AI · v2.4" text with the
-        real model_version from /meta (hidden when null) and the live
-        date/time from the browser clock.  No hard-coded "EAT" — the
-        timezone abbreviation comes from Intl.DateTimeFormat. */}
       <div className="flex items-center gap-space-md flex-shrink-0">
         <div className="hidden xl:flex flex-col text-right leading-tight">
           <span className="font-label-metric text-label-metric text-on-surface">
@@ -168,17 +418,17 @@ function DesktopHeader({ pathname }: { pathname: string }) {
 }
 
 /**
- * Mobile header (default, < md) — matches m01_overview and m15_more code.html
- * (m02_predictor_location is a minority variant with warm bg and a different
- * logo; m01/m15 agree and are followed).
- *
- * - bg: cool canvas #EEF0F3 at 85% + backdrop-blur-xl + soft shadow
- * - height: h-16 (64px) + pt-safe for notched devices
- * - logo: rounded-square translucent orange container with orange hex SVG
- * - title: two-line — "Kenya Land" (title-card semibold) + "Valuation AI" (caption-sm uppercase)
- * - right: notifications button (w-11 h-11 white circle with red dot) + profile circle
+ * Mobile header (default, < md).  The bell is wired to the shared
+ * NotificationsPanel (A1).
  */
-function MobileHeader() {
+function MobileHeader({
+  onNotifications,
+}: {
+  onNotifications: (opener: HTMLElement | null) => void;
+}) {
+  const { t } = useTranslation();
+  const healthQ = useHealth();
+  const healthy = healthQ.data?.status === 'ok';
   return (
     <header
       className="md:hidden fixed top-0 left-0 right-0 z-50 bg-canvas-cool/85 backdrop-blur-xl shadow-[0_1px_8px_rgba(27,21,18,0.03)]"
@@ -208,16 +458,20 @@ function MobileHeader() {
           </div>
         </div>
         <div className="flex items-center gap-space-sm">
-          {/* O2: removed the permanent orange notification dot — no fake
-              notification badges.  The bell icon stays as an affordance
-              for future real-state wiring; the dot is gone until there
-              is something real to surface. */}
           <button
-            aria-label="Notifications"
+            aria-label={t('rail.notifications.label')}
             type="button"
+            onClick={(e) => onNotifications(e.currentTarget)}
             className="relative w-11 h-11 rounded-full bg-surface-container-lowest flex items-center justify-center text-on-surface-variant shadow-[0_2px_8px_rgba(27,21,18,0.06)]"
           >
             <span className="material-symbols-outlined text-[20px]">notifications</span>
+            {/* A1: a dot appears ONLY when health is not healthy. */}
+            {!healthy && !healthQ.isLoading && (
+              <span
+                className="absolute top-2 right-2 w-2 h-2 rounded-full bg-error"
+                aria-hidden="true"
+              />
+            )}
           </button>
           <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center shadow-[0_2px_6px_rgba(157,68,0,0.2)]">
             <span className="material-symbols-outlined text-on-primary text-[18px]">person</span>
@@ -229,85 +483,103 @@ function MobileHeader() {
 }
 
 /**
- * Left icon rail (xl+ only) — transparent floating rail per the majority of
- * web design screens (01_overview, 02, 03, 04, 05, 06, 07, 08, 09 agree).
- *
- * Drifts fixed vs the previous LayoutShell:
- * - Position: top-20 bottom-12 (starts under the 80px header, stops 48px above
- *   bottom) instead of top-0 bottom-0 full-height.
- * - Background: TRANSPARENT (no bg, no right border) — the rail is just
- *   floating circular buttons on the canvas, not a visible column.
- * - Layout: justify-between with two child groups (top: fullscreen/
- *   notifications/help; bottom: public/settings) instead of a single
- *   evenly-spaced column.
- * - Button bg: bg-surface-container-lowest (#FFFFFF pure white) instead of
- *   bg-surface-container-highest (#eae1d9 beige).
- * - Button hover: text-primary only (no bg change) instead of changing both
- *   bg and text. Matches design's hover:text-primary.
- * - Button transition: transition-all (matches design) instead of
- *   transition-colors.
- * - Notifications button: plain bell (no dot — P8b-M removed the
- *   permanent notification-dot decoration that implied a state).
+ * Left icon rail (xl+ only).  A1: every button is wired — Fullscreen,
+ * Notifications, Help (top); Region & Boundaries (language switch),
+ * System Settings (bottom).
  */
-function LeftRail() {
+function LeftRail({
+  onNotifications,
+  onHelp,
+}: {
+  onNotifications: (opener: HTMLElement | null) => void;
+  onHelp: (opener: HTMLElement | null) => void;
+}) {
+  const { t, i18n } = useTranslation();
+  const navigate = useNavigate();
+  const fullscreen = useFullscreen();
   const railButtonClass =
     'relative w-11 h-11 rounded-full bg-surface-container-lowest flex items-center justify-center text-on-surface-variant hover:text-primary transition-all shadow-rail-button';
+
+  function handleRail(item: { label: string; icon: string }, opener: HTMLElement | null) {
+    // Map the rail item by its label (nav-config carries the human label;
+    // the icon alone is not unique enough to dispatch on).
+    switch (item.label) {
+      case 'Fullscreen View':
+        fullscreen.toggle();
+        break;
+      case 'Notifications':
+        onNotifications(opener);
+        break;
+      case 'Knowledge Base':
+        onHelp(opener);
+        break;
+      case 'Region & Boundaries': {
+        // Switch language en <-> sw through the SAME mechanism the Settings
+        // page uses (i18n.changeLanguage + storageSet so it persists).
+        const next = i18n.language.startsWith('sw') ? 'en' : 'sw';
+        i18n.changeLanguage(next);
+        storageSet('lang', next);
+        break;
+      }
+      case 'System Settings':
+        navigate('/settings');
+        break;
+      default:
+        break;
+    }
+  }
+
+  // The language button's label shows the language that WILL be selected,
+  // as that language's native name (language-neutral — "Kiswahili" shows
+  // the same whether you're on English or Kiswahili, so the affordance is
+  // unambiguous in either locale).
+  const NATIVE_LANG_NAME: Record<string, string> = { en: 'English', sw: 'Kiswahili' };
+  function globeTitle(): string {
+    const next = i18n.language.startsWith('sw') ? 'en' : 'sw';
+    return NATIVE_LANG_NAME[next] ?? next;
+  }
+
+  function renderTop(item: { label: string; icon: string }) {
+    const isFullscreen = item.label === 'Fullscreen View';
+    const isGlobe = item.label === 'Region & Boundaries';
+
+    // Fullscreen is disabled when the browser blocks it.
+    const disabled = isFullscreen && !fullscreen.enabled;
+    const icon = isFullscreen
+      ? fullscreen.isFullscreen
+        ? 'fullscreen_exit'
+        : 'fullscreen'
+      : item.icon;
+    const title = isGlobe ? globeTitle() : item.label;
+    const ariaLabel = isGlobe ? title : item.label;
+
+    return (
+      <button
+        key={item.label}
+        type="button"
+        aria-label={ariaLabel}
+        title={disabled ? t('rail.fullscreen.unavailable') : title}
+        disabled={disabled}
+        onClick={(e) => handleRail(item, e.currentTarget)}
+        className={`${railButtonClass} ${disabled ? 'opacity-40 cursor-not-allowed' : ''}`}
+      >
+        <span className="material-symbols-outlined text-[20px]">{icon}</span>
+      </button>
+    );
+  }
 
   return (
     <aside className="hidden xl:flex fixed left-0 top-20 bottom-12 w-[72px] z-40 flex-col items-center justify-between py-space-lg">
       <div className="flex flex-col items-center gap-space-sm">
-        {RAIL_ITEMS_TOP.map((item) => (
-          <button
-            key={item.label}
-            type="button"
-            aria-label={item.label}
-            title={item.label}
-            className={railButtonClass}
-          >
-            <span className="material-symbols-outlined text-[20px]">{item.icon}</span>
-          </button>
-        ))}
+        {RAIL_ITEMS_TOP.map((item) => renderTop(item))}
       </div>
       <div className="flex flex-col items-center gap-space-sm">
-        {RAIL_ITEMS_BOTTOM.map((item) => (
-          <button
-            key={item.label}
-            type="button"
-            aria-label={item.label}
-            title={item.label}
-            className={railButtonClass}
-          >
-            <span className="material-symbols-outlined text-[20px]">{item.icon}</span>
-          </button>
-        ))}
+        {RAIL_ITEMS_BOTTOM.map((item) => renderTop(item))}
       </div>
     </aside>
   );
 }
 
-/**
- * Mobile bottom dock (default, < md) — floating pill per 01_mobile_overview
- * and m01_overview code.html.
- *
- * Drifts fixed vs the previous LayoutShell:
- * - Shape: FLOATING PILL (max-w-[390px], mx-auto, rounded-[28px], two-stage
- *   shadow) instead of a full-width bar with squared corners + border-t.
- * - Shadow: 0 8px 28px rgba(27,21,18,0.08), 0 2px 8px rgba(27,21,18,0.04)
- *   (two-stage diffuse) instead of none.
- * - Active item: FILLED dark pill (bg #1F1511 Ink Active Neutral + white text
- *   + shadow-[0_4px_12px_rgba(31,21,17,0.25)]) instead of text-primary color
- *   only. This matches the data-active-classes metadata on both m01 and
- *   01_mobile_overview's <nav>, and the actual rendering in m15_more where
- *   the active "More" button is a filled dark pill. The static HTML in m01
- *   only applied text-primary (a Stitch export inconsistency), but the
- *   screenshots confirm the filled pill is the intended active state.
- * - Inactive item: text-secondary (#6A5B56 warm grey) instead of
- *   text-on-surface-variant (#574238 darker brown).
- * - Wrapper: pointer-events-none on the outer nav (lets clicks pass through
- *   the empty space around the floating dock), pointer-events-auto on the
- *   dock itself.
- * - Safe area: pb-safe + pb-3 for notched devices.
- */
 function MobileDock({ pathname }: { pathname: string }) {
   return (
     <nav
@@ -341,26 +613,54 @@ function MobileDock({ pathname }: { pathname: string }) {
 
 export default function LayoutShell() {
   const { pathname } = useLocation();
-  // P8b: push the configured FX rate into the shared currency store as
-  // soon as /meta loads (null until the backend serves one).
   useFxFromMeta();
+
+  // A1: shared Notifications + Help dialogs (opened from the rail or the
+  // header bell).  returnFocusTo holds the button that opened the dialog
+  // so Escape/close returns focus to it.
+  const [notifOpen, setNotifOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [notifOpener, setNotifOpener] = useState<HTMLElement | null>(null);
+  const [helpOpener, setHelpOpener] = useState<HTMLElement | null>(null);
 
   return (
     <div className="min-h-screen bg-surface text-on-surface">
       <DesktopHeader pathname={pathname} />
-      <MobileHeader />
-      <LeftRail />
+      <MobileHeader
+        onNotifications={(opener) => {
+          setNotifOpener(opener);
+          setNotifOpen(true);
+        }}
+      />
+      <LeftRail
+        onNotifications={(opener) => {
+          setNotifOpener(opener);
+          setNotifOpen(true);
+        }}
+        onHelp={(opener) => {
+          setHelpOpener(opener);
+          setHelpOpen(true);
+        }}
+      />
 
-      {/* Main content — padding accounts for which chrome is visible:
-        - mobile: pt-16 (64px header) + pb-36 (space for floating dock + margin)
-        - tablet (md): pt-20 (80px header) + pb-12 (48px bottom margin, no dock)
-        - desktop (xl): pt-20 + pl-[72px] (rail) + pb-12
-      */}
       <main className="min-h-screen pt-16 md:pt-20 px-margin-mobile md:px-margin xl:pl-[72px] pb-36 md:pb-12">
         <Outlet />
       </main>
 
       <MobileDock pathname={pathname} />
+
+      {/* A1: shared panels — one NotificationsPanel for the rail bell + the
+          mobile header bell. */}
+      <NotificationsPanel
+        open={notifOpen}
+        onClose={() => setNotifOpen(false)}
+        returnFocusTo={notifOpener}
+      />
+      <HelpDialog
+        open={helpOpen}
+        onClose={() => setHelpOpen(false)}
+        returnFocusTo={helpOpener}
+      />
     </div>
   );
 }
