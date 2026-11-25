@@ -1,10 +1,71 @@
 # API Reference
 
+Owner: [NAME]
+Last verified: 2026-11-24
+
+Two-line summary: every `/api/v1` endpoint with request/response shapes
+and the artifact each one serves — the interactive versions live at
+`/docs` (Swagger) and `/redoc`. Asking prices throughout: metrics and
+verdicts describe listing prices, not transactions.
+
+For: frontend developers and anyone integrating against the API.
+
 Base URL: `/api/v1`
+
+## Endpoint index
+
+24 operations (see `docs/openapi.snapshot.json`, the committed schema —
+CI fails on any drift via `scripts/check_openapi_snapshot.py`):
+
+| Endpoint | Serves | Needs |
+|---|---|---|
+| `GET /health` | status + artifact load state | — |
+| `GET /meta` | model version, data date, coverage, FX, flag rule, methodology | `metadata.json` |
+| `POST /predict` | point estimate + 80% range + drivers + comparables | trained ensemble |
+| `GET /predict/options` | canonical inputs for the predictor form | — |
+| `GET /overview/summary` | totals, verdicts, by-type/size/distance breakdowns | `listings_scored.parquet` |
+| `GET /listings/scored` (+ `/export.csv`) | Deal Finder table (paginated, sortable, suspect-gated) | `listings_scored.parquet` |
+| `GET /listings/options` | filters bar lists + limits | `listings_scored.parquet` |
+| `GET /listings/{listing_no}/nearby` | nearest listings by haversine | `listings_scored.parquet` |
+| `GET /counties/summary` | per-county aggregates + price bands | `county_summary.csv` or the scored frame |
+| `GET /counties/row_counts` | county names + listing counts | `listings_scored.parquet` |
+| `GET /counties/boundaries` | 47-county GeoJSON | `kenya_counties_simplified.geojson` |
+| `GET /counties/{county}/distance-profile` | distance scatter profile | scored frame |
+| `GET /counties/{county}/listings` | per-county listing page | scored frame |
+| `GET /data/price-distribution` | log-scale price histogram + percentiles | scored frame |
+| `GET /data/price-by-group` | per-prop_type/size-band price summary | scored frame |
+| `GET /data/relationships` | size-vs-price rho, deciles, seeded sample | scored frame |
+| `GET /model/metrics` | CV/test metrics, coverage, weights | `metrics.json` + table |
+| `GET /model/predictions` | stored prediction comparisons | prediction parquets |
+| `GET /model/explainability` | global SHAP + labels | `shap_global.csv` etc. |
+| `GET /model/feature-evaluation` | Phase 3 feature ranking | `feature_evaluation.csv` |
+| `GET /model/error-by-support` | error by county/proximity support | `error_by_support.csv` |
+| `GET /places/search`, `GET /places/nearby` | place search + POI proximity | spatial GPKGs |
+
+## Prediction flow
+
+![Prediction request flow: a sequence diagram across User, Frontend, POST /api/v1/predict, Model registry and Prediction service for one valuation request, with an ALT frame for the registry-degraded path returning 503 MODEL_NOT_LOADED](assets/diagrams/03-prediction-flow.png)
+
+*Figure — prediction request flow: one valuation request, plus the degraded-registry path. Owner-provided, 2026-11-25.*
+
+`POST /predict` receives the parcel inputs
+(county, prop_type, size, the infrastructure checklist, coordinates when
+known). The backend rebuilds the production features exactly as Notebook
+1 defined them (distances from the spatial indexes, OSM scores, checklist
+aggregation), imputes missing inputs with the training medians from
+`preprocessing.json`, runs the three loaded models, blends their log
+predictions with the `ensemble_weights.json` weights, and applies the
+split-conformal quantile for the requested level (default 0.8) — the
+range is multiplicative: `[pred × exp(−q), pred × exp(+q)]`. The response
+carries the estimate per acre and for the parcel, the range, low-support
+flags from `coverage_rules.json`, the live SHAP driver breakdown, and the
+nearest comparable listings. Rate-limited per client
+(`PREDICT_RATE_LIMIT_PER_MINUTE`).
 
 ## GET /health
 
 Liveness + readiness probe.
+
 
 **Response 200:**
 ```json
@@ -32,7 +93,10 @@ Returns model version, data date, and coverage thresholds from artifact files.
 (the data-quality-flag percentile window), and `methodology` (the
 plain-language pipeline copy) — all documented below.
 
-**Response 200 (artifacts loaded, no FX configured):**
+**Response 200 (artifacts loaded, no FX configured):** *(example values
+— `model_version`, `data_date`, and `weights` come from your
+`artifacts/metadata.json` / `ensemble_weights.json`; the 2026-11-21 run
+served "Run B (selected features)" with weights 0.2295/0.6683/0.1022)*
 ```json
 {
   "model_version": "Run A (9 base features)",
@@ -237,6 +301,10 @@ final report's SHAP-in-scope decision).
   explanation service is unavailable.
 
 ### GET /listings/scored — Deal Finder
+
+The suspect gate is not part of `/predict`; it runs on listings via
+`GET /api/v1/listings/scored` (Deal Finder). Verdict chips on `/predict`
+come from the comparable listings in the response.
 
 Source: `app_exports/listings_scored.parquet` (Cell 9.6).  Paginated +
 filtered listing rows with SERVER-SIDE sorting.  Query parameters:

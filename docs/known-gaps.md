@@ -6,6 +6,47 @@ flagged in the corresponding phase's final reply.  They are collected here
 in one place so the next maintainer knows what was approximated, what was
 stubbed, and what coverage gaps were accepted.
 
+## Top open gaps
+
+The ten items most worth closing next, one line each, linked to the full
+entry. Items 4–6 and 10 live in
+[data-and-legal.md](data-and-legal.md) / [evidence.md](evidence.md) / the
+[README](../README.md) rather than as numbered entries here.
+
+> **Kiswahili native review is the prominent open language item.** Every
+> Kiswahili string added since the P2b round is marked `// TODO(sw):
+> review` and must be reviewed by a native speaker before shipping — see
+> item 2 (entries 102 and 115).
+
+1. **Parity check fails 0% — do not serve.** Stale serving manifest
+   (0.6211/0.2929/0.0860) plus xgboost 3.4.1-trained vs 2.1.1-served.
+   [evidence.md](evidence.md#parity-check-owner-run-post-training--owner-provided).
+2. **Kiswahili native review needed** — parcel feature translations and
+   all `sw` keys added since P2b are marked `// TODO(sw): review`. Entry
+   115 ([P2b](#p2b--price-predictor-real-data-wiring-2026-11-17)); entry
+   102 ([O2](#overview-build-round-o1--o2-2026-11-17)).
+3. Untranslated Kiswahili technical terms (Ensemble, SHAP, Conformal,
+   XGBoost/CatBoost/TabNet, KSh, Log scale, API) deliberately left in
+   English. Entry 46
+   ([Frontend gaps](#frontend-gaps-f0-f9--reported-deliberately-left-as-is)).
+4. Personal-data retention decision pending — 1,115 phone rows / 252
+   email rows are kept as-scraped; owner to decide redact-vs-keep.
+   [data-and-legal.md](data-and-legal.md#owner-to-verify-checklist).
+5. Scrape legality unconfirmed (Property24 Kenya + BuyRentKenya ToS /
+   robots.txt).
+   [data-and-legal.md](data-and-legal.md#position-on-scraping-what-the-repo-supports).
+6. Scrape window unknown — `list_date` spans 2017-11-08 to 2026-04-09 but
+   the actual scrape window is TBC.
+   [data-and-legal.md](data-and-legal.md#scrape-date-range).
+7. Trained artifacts not in the repo — run Notebooks 1–3 to produce
+   `artifacts/` before serving. [artifacts.md](artifacts.md).
+8. OpenAPI snapshot drift — live schema ≠ frozen snapshot; 1 backend
+   test fails. [evidence.md](evidence.md#test-results).
+9. Mypy errors in pre-existing files (lenient CI tolerates them). Entry
+   1 ([B0](#b0--repo-scaffolding)).
+10. 45-second demo video not recorded (URL TBC); README video block
+    commented out. [README](../README.md).
+
 ## B0 — Repo scaffolding
 
 1. **Mypy errors in pre-existing files** — `backend/app/core/logging.py` has
